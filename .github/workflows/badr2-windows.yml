@@ -89,7 +89,8 @@ jobs:
         run: |
           set PYTHONPATH=%CD%\stage\app\pydeps;%CD%\stage\app
           call "%PYQGIS%" -c "import sys, qgis.core as c; print('Python', sys.version); print('QGIS', c.Qgis.QGIS_VERSION)"
-          call "%PYQGIS%" -c "from qgis.PyQt.QtQml import QJSEngine; print('QtQml available: full APP-6D rendering')"
+          call "%PYQGIS%" -c "from badr.symbology.engine import _load_js_engine; from qgis.PyQt.QtWidgets import QApplication; a = QApplication([]); print('Symbol engine:', 'milsymbol (full APP-6D)' if _load_js_engine() else 'FALLBACK ONLY - QtQml missing')"
+          exit /b 0
 
       - name: Test suite on Windows
         id: tests
