@@ -82,10 +82,9 @@ class Workbench(QObject):
             raise RuntimeError("layer failed to load")
         self.project.addMapLayer(layer, False)
         node = self.project.layerTreeRoot().findGroup(group) or self.project.layerTreeRoot()
-        if top:
-            node.insertLayer(0, layer)
-        else:
-            node.addLayer(layer)
+        tree_node = node.insertLayer(0, layer) if top else node.addLayer(layer)
+        if tree_node is not None:
+            tree_node.setExpanded(False)          # keep the layer list compact; legends open on demand
         return layer
 
     def set_basemap(self, name):

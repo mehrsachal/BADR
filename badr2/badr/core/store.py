@@ -3,7 +3,7 @@
 An *operation* is a folder holding one GeoPackage (``cop.gpkg``) with a fixed
 set of layers.  Everything the user, the AI or a sensor adds to the picture is
 a feature in one of these layers, so it can be styled, queried, analysed by any
-of the ~1000 QGIS processing algorithms, and exported to any GIS.
+QGIS processing algorithm, and exported to any GIS.
 
 Live sensor tracks are kept in memory layers (they are transient by nature).
 """

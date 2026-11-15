@@ -1,0 +1,8 @@
+# BADR 2 runs on the Python that ships with QGIS (3.34 LTR or newer), which
+# already provides PyQt, GDAL and numpy.  Install the extras into that Python:
+#   python -m pip install -r requirements.txt
+anthropic>=1.0          # Claude (default AI provider); not needed for local / OpenAI-compatible models
+earthengine-api>=1.0    # Google Earth Engine imagery and elevation
+pyserial>=3.5           # optional: serial / USB telemetry radios and GPS receivers
+paho-mqtt>=1.6          # optional: MQTT sensor networks
+pytest>=7               # tests only

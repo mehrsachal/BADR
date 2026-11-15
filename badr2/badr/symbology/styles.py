@@ -1,6 +1,6 @@
 """QGIS renderers and labels for the COP layers."""
 from qgis.core import (
-    QgsFillSymbol, QgsLineSymbol, QgsMarkerLineSymbolLayer, QgsMarkerSymbol,
+    Qgis, QgsFillSymbol, QgsLineSymbol, QgsMarkerLineSymbolLayer, QgsMarkerSymbol,
     QgsPalLayerSettings, QgsProperty, QgsSimpleFillSymbolLayer, QgsSimpleLineSymbolLayer,
     QgsSimpleMarkerSymbolLayer, QgsSingleSymbolRenderer, QgsSvgMarkerSymbolLayer,
     QgsSymbolLayer, QgsTextBufferSettings, QgsTextFormat, QgsUnitTypes,
@@ -11,11 +11,14 @@ from qgis.PyQt.QtGui import QColor, QFont
 
 from .palette import COLORS, GRAPHIC_KINDS
 
-MM_PER_PX = 0.2        # symbol image px -> map mm at symbol scale 1.0
+MM_PER_PX = 0.3        # symbol image px -> map mm at symbol scale 1.0
 
-_SYM_ARGS = '"sidc","name","higher","info","dtg","heading","speed","strength"'
-_INCIDENT_ARGS = '"sidc","name",NULL,NULL,"dtg"'
-_DETECTION_ARGS = '"sidc","label",NULL,to_string(round("confidence"*100))||\'%\',"dtg"'
+# Amplifiers drawn on the map are kept to what a planner reads at a glance;
+# DTG and remarks stay in the attributes (and in the AI's view of the picture).
+_SYM_ARGS = '"sidc","name","higher","info",NULL,"heading","speed","strength"'
+_TRACK_ARGS = '"sidc","name",NULL,"info",NULL,"heading","speed"'
+_INCIDENT_ARGS = '"sidc","name"'
+_DETECTION_ARGS = '"sidc","label",NULL,to_string(round("confidence"*100))||\'%\''
 
 
 def _pending_ring():
@@ -44,7 +47,6 @@ def milsym_marker(args, scale=1.0, review=True, stale_field=None):
     if review:
         sym.insertSymbolLayer(0, _pending_ring())
     if stale_field:
-        sym.setDataDefinedProperty  # noqa: B018 (opacity handled below)
         svg.setDataDefinedProperty(QgsSymbolLayer.PropertyOpacity,
                                    QgsProperty.fromExpression(f'if("{stale_field}" = 1, 45, 100)'))
     return sym
@@ -118,8 +120,12 @@ def style_lines(layer):
     head_sym = QgsMarkerSymbol()
     head_sym.changeSymbolLayer(0, head)
     arrow = QgsMarkerLineSymbolLayer()
-    arrow.setPlacement(QgsMarkerLineSymbolLayer.LastVertex)
-    arrow.setRotateMarker(True)
+    try:
+        arrow.setPlacements(Qgis.MarkerLinePlacement.LastVertex)
+        arrow.setRotateSymbols(True)
+    except AttributeError:                       # older QGIS
+        arrow.setPlacement(QgsMarkerLineSymbolLayer.LastVertex)
+        arrow.setRotateMarker(True)
     arrow.setSubSymbol(head_sym)
     arrows = ",".join(f"'{k}'" for k, v in GRAPHIC_KINDS.items() if v[2].startswith("arrow"))
     arrow.setDataDefinedProperty(QgsSymbolLayer.PropertyLayerEnabled,
@@ -153,7 +159,7 @@ def apply_styles(operation, symbol_scale=1.0):
     L["incidents"].setRenderer(QgsSingleSymbolRenderer(milsym_marker(_INCIDENT_ARGS, symbol_scale * 0.85)))
     L["detections"].setRenderer(QgsSingleSymbolRenderer(milsym_marker(_DETECTION_ARGS, symbol_scale * 0.85)))
     L["tracks"].setRenderer(QgsSingleSymbolRenderer(
-        milsym_marker(_SYM_ARGS, symbol_scale * 0.9, review=False, stale_field="stale")))
+        milsym_marker(_TRACK_ARGS, symbol_scale * 0.9, review=False, stale_field="stale")))
     style_lines(L["lines"])
     style_areas(L["areas"])
 

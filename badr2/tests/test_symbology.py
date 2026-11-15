@@ -79,3 +79,25 @@ def test_fallback_renderer_is_self_contained():
     from badr.symbology.engine import fallback_svg
     svg, w, h = fallback_svg("10061000141211000000", {"name": "X"})
     assert "<svg" in svg and w > 0 and h > 0
+
+
+def test_every_cop_layer_symbol_expression_evaluates_with_empty_attributes(qgis_app, operation):
+    """Regression: NULL attributes or a missing field must never blank the symbol."""
+    from qgis.core import QgsExpression, QgsExpressionContext, QgsExpressionContextUtils, QgsProperty, QgsSymbolLayer
+    from badr.symbology.styles import apply_styles
+    apply_styles(operation)
+    code = "10031000001211000000"
+    operation.add_point("units", 1.0, 1.0, {"sidc": code})
+    operation.add_point("incidents", 1.0, 1.0, {"sidc": code})
+    operation.add_point("detections", 1.0, 1.0, {"sidc": code, "label": "x", "confidence": 0.5})
+    operation.add_point("tracks", 1.0, 1.0, {"sidc": code, "name": "T"})
+    for key in ("units", "incidents", "detections", "tracks"):
+        layer = operation.layer(key)
+        svg_layer = layer.renderer().symbol().symbolLayers()[-1]
+        ctx = QgsExpressionContext(QgsExpressionContextUtils.globalProjectLayerScopes(layer))
+        ctx.setFeature(next(layer.getFeatures()))
+        for prop in (QgsSymbolLayer.PropertyName, QgsSymbolLayer.PropertySize):
+            expr = QgsExpression(svg_layer.dataDefinedProperties().property(prop).expressionString())
+            val = expr.evaluate(ctx)
+            assert not expr.hasEvalError(), f"{key}: {expr.evalErrorString()}"
+            assert val not in (None, "") and str(val) != "NULL", key

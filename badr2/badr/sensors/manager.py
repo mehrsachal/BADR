@@ -16,6 +16,7 @@ from qgis.PyQt.QtCore import QObject, QTimer, pyqtSignal
 from ..core import geodesy
 from ..core.settings import Settings
 from ..core.store import now_dtg
+from ..symbology.engine import SymbolEngine
 from .decoders import DECODERS, make_decoder
 from .model import Observation
 from .transports import TRANSPORTS, make_transport
@@ -220,13 +221,17 @@ class DeviceManager(QObject):
         name = dev.alias or obs.name or obs.uid
         conn = self.connections.get(conn_id)
         info = []
-        if obs.alt is not None:
-            info.append(f"{obs.alt:.0f}m")
+        if obs.alt is not None and abs(obs.alt) >= 5:
+            info.append(f"{round(obs.alt / 10.0) * 10:.0f}m")
         if "battery" in obs.attrs:
             info.append(f"BAT {obs.attrs['battery']}%")
         attrs = {"sidc": obs.symbol(), "name": name, "info": " ".join(info), "dtg": now_dtg(),
-                 "heading": obs.heading, "speed": None if obs.speed is None else obs.speed * 3.6,
+                 "heading": obs.heading, "speed": None if obs.speed is None or obs.speed < 0.3 else obs.speed * 3.6,
                  "alt": obs.alt, "device": conn.profile["name"] if conn else conn_id, "stale": 0}
+        # Render the symbol now, on the GUI thread, so the map never has to fall
+        # back to a placeholder for a track whose amplifiers just changed.
+        SymbolEngine.instance().render(attrs["sidc"], {"name": name, "info": attrs["info"],
+                                                       "heading": attrs["heading"], "speed": attrs["speed"]})
         geom = QgsGeometry.fromPointXY(QgsPointXY(obs.lon, obs.lat))
         if new or not op.update("tracks", obs.uid, attrs, geom):
             attrs["uid"] = obs.uid

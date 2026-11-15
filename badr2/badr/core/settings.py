@@ -55,6 +55,7 @@ PROVIDERS = {
 DEFAULTS = {
     "ai/provider": "anthropic",
     "ai/max_tokens": 4096,
+    "ai/effort": "low",                # low = fast (map actions), medium / high = deeper analysis
     "ai/review_ai_changes": True,      # AI-created features land as "pending review"
     "ai/confirm_code": True,           # ask before running AI-written PyQGIS
     "gee/project": "",

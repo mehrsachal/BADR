@@ -2,8 +2,8 @@
 
 QGIS is open source, so nothing needs reverse-engineering: BADR links the QGIS
 engine and gets every provider and every processing algorithm (native C++,
-GDAL, and GRASS/SAGA when installed).  The problem is the opposite one - about
-a thousand tools presented in GIS vocabulary.  This module:
+GDAL, and GRASS/SAGA when installed).  The problem is the opposite one - hundreds
+of tools presented in GIS vocabulary.  This module:
 
 * introspects the live processing registry (so it always matches the installed
   QGIS version),

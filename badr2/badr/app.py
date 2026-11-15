@@ -52,6 +52,7 @@ def main(argv=None):
     ap = argparse.ArgumentParser(prog="badr", description="BADR 2 - AI-first military planning GIS")
     ap.add_argument("operation", nargs="?", help="operation folder to open")
     ap.add_argument("--demo", action="store_true", help="load a fictional training scenario")
+    ap.add_argument("--mode", help="panel to show at start (PICTURE, PLAN, TERRAIN, INTEL, IMAGERY, SENSORS, TOOLS)")
     ap.add_argument("--screenshot", metavar="PNG", help="render the window to a PNG and exit")
     args = ap.parse_args(argv)
 
@@ -61,6 +62,12 @@ def main(argv=None):
     if args.demo:
         from .demo import load_demo
         load_demo(win)
+    if args.mode:
+        names = [m[0] for m in __import__("badr.ui.panels", fromlist=["MODES"]).MODES]
+        if args.mode.upper() in names:
+            i = names.index(args.mode.upper())
+            win.mode_group.button(i).setChecked(True)
+            win.stack.setCurrentIndex(i)
     win.show()
     if args.screenshot:
         from qgis.PyQt.QtCore import QTimer
@@ -68,7 +75,7 @@ def main(argv=None):
         def grab():
             win.grab().save(args.screenshot)
             app.quit()
-        QTimer.singleShot(2500, grab)
+        QTimer.singleShot(4500, grab)
     rc = app.exec() if hasattr(app, "exec") else app.exec_()
     app.exitQgis()
     return rc

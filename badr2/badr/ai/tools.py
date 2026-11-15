@@ -255,7 +255,7 @@ class Toolbox:
              "area": LOC, "radius_m": {"type": "number"}},
             self.reference_data, ["action", "name"])
         add("search_gis_tools",
-            "Search every geoprocessing algorithm in the QGIS engine (about a thousand: buffers, overlays, raster "
+            "Search every geoprocessing algorithm in the QGIS engine (hundreds: buffers, overlays, raster "
             "maths, networks, statistics ...) when no dedicated tool fits.",
             {"query": {"type": "string"}}, self.search_gis_tools, ["query"])
         add("describe_gis_tool", "Get the parameters of a QGIS algorithm before running it.",

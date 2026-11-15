@@ -33,6 +33,9 @@ class Reply:
     text: str = ""
     tool_calls: list = field(default_factory=list)
     stop: str = "end"            # end | tool_use | max_tokens | refusal
+    tokens_in: int = 0           # uncached input tokens billed for this call
+    tokens_cached: int = 0       # input tokens served from the prompt cache
+    tokens_out: int = 0
 
 
 class LlmError(RuntimeError):
@@ -96,8 +99,13 @@ class AnthropicClient(BaseClient):
     def _call(self):
         self._trim()
         a = self._anthropic
+        # Prompt caching: tools + system prompt + conversation so far are a stable
+        # prefix, so every turn after the first re-reads them from cache at a
+        # fraction of the price and latency.  Effort is the speed/depth dial.
         kwargs = dict(model=self.model, max_tokens=self.max_tokens, system=self.system,
-                      tools=self._tools(), messages=self.history)
+                      tools=self._tools(), messages=self.history,
+                      cache_control={"type": "ephemeral"},
+                      output_config={"effort": Settings.get("ai/effort")})
         try:
             if self._fallbacks:
                 try:
@@ -121,6 +129,12 @@ class AnthropicClient(BaseClient):
         # keep the full content (including thinking blocks) for the next turn
         self.history.append({"role": "assistant", "content": resp.content})
         reply = Reply()
+        usage = getattr(resp, "usage", None)
+        if usage is not None:
+            reply.tokens_cached = int(getattr(usage, "cache_read_input_tokens", 0) or 0)
+            reply.tokens_in = int(getattr(usage, "input_tokens", 0) or 0) + int(
+                getattr(usage, "cache_creation_input_tokens", 0) or 0)
+            reply.tokens_out = int(getattr(usage, "output_tokens", 0) or 0)
         for block in resp.content:
             if block.type == "text":
                 reply.text += block.text
@@ -197,6 +211,10 @@ class OpenAICompatClient(BaseClient):
             raise LlmError(f"Unexpected response from LLM endpoint: {str(data)[:300]}") from exc
         self.history.append({k: v for k, v in msg.items() if k in ("role", "content", "tool_calls")})
         reply = Reply(text=msg.get("content") or "")
+        usage = data.get("usage") or {}
+        reply.tokens_cached = int((usage.get("prompt_tokens_details") or {}).get("cached_tokens", 0) or 0)
+        reply.tokens_in = int(usage.get("prompt_tokens", 0) or 0) - reply.tokens_cached
+        reply.tokens_out = int(usage.get("completion_tokens", 0) or 0)
         for tc in msg.get("tool_calls") or []:
             fn = tc.get("function", {})
             try:

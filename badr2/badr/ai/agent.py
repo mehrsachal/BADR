@@ -22,7 +22,10 @@ receive-only) and you do not direct engagements; a human decides and acts.
 
 How to work:
 - Act, don't describe. If the request can be carried out with tools, carry it out, then report.
-- Read before you reason: call get_picture when the request depends on what is on the map.
+- Read before you reason: call get_picture when the request depends on what is on the map - once; \
+do not re-read it after your own changes.
+- Be economical: issue independent tool calls together in a single turn, and never repeat a call \
+whose result you already have.
 - Use NATO APP-6D symbology and doctrine terms. Locations are MGRS by default; accept and give MGRS.
 - Sub-conventional operations (COIN, CT, stability) are the main use: treat incidents, human terrain, \
 routes and patterns of life as first-class, not just units and phase lines.
@@ -44,7 +47,8 @@ the map carries the detail. No filler.
 
 def build_system_prompt():
     now = datetime.now(timezone.utc)
-    return SYSTEM_PROMPT + f"\nCurrent time: {now.strftime('%d%H%MZ %b %Y').upper()} ({now.date().isoformat()})."
+    # date only: a per-minute timestamp would change the prompt and defeat prompt caching
+    return SYSTEM_PROMPT + f"\nToday is {now.strftime('%d %b %Y').upper()} ({now.date().isoformat()}), times are Zulu."
 
 
 class Agent:
@@ -75,7 +79,15 @@ class Agent:
         emit = self.on_event
         try:
             emit("status", "Thinking")
-            reply = self.client.send_user(text, image_b64)
+            usage = {"in": 0, "cached": 0, "out": 0, "calls": 0}
+
+            def count(r):
+                usage["in"] += r.tokens_in
+                usage["cached"] += r.tokens_cached
+                usage["out"] += r.tokens_out
+                usage["calls"] += 1
+                return r
+            reply = count(self.client.send_user(text, image_b64))
             steps = 0
             while reply.tool_calls and not self._abort:
                 steps += 1
@@ -94,12 +106,13 @@ class Agent:
                     emit("tool_result", {"name": call.name, "ok": not is_err, "text": out})
                     results.append((call.id, call.name, out, is_err))
                 emit("status", "Thinking")
-                reply = self.client.send_tool_results(results)
+                reply = count(self.client.send_tool_results(results))
             if self._abort:
                 emit("error", "Stopped.")
                 return ""
             if reply.stop == "max_tokens":
                 reply.text += "\n\n[Response cut off at the token limit.]"
+            emit("usage", usage)
             emit("final", reply.text)
             return reply.text
         except LlmError as exc:

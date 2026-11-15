@@ -62,15 +62,20 @@ def _load_js_engine():
 def _center(svg, ax, ay, w, h):
     """Re-wrap an SVG so its anchor point sits at the image centre."""
     m = re.search(r"viewBox=\"([-\d.e]+)[ ,]+([-\d.e]+)[ ,]+([-\d.e]+)[ ,]+([-\d.e]+)\"", svg)
-    minx, miny = (float(m.group(1)), float(m.group(2))) if m else (0.0, 0.0)
+    if m:
+        minx, miny, vbw = float(m.group(1)), float(m.group(2)), float(m.group(3))
+    else:
+        minx, miny, vbw = 0.0, 0.0, w
+    k = w / vbw if vbw else 1.0          # viewBox units -> px (milsymbol draws on a 100-unit grid)
     inner = svg[svg.index(">") + 1: svg.rindex("</svg>")]
     W = 2 * max(ax, w - ax) + 2
     H = 2 * max(ay, h - ay) + 2
-    dx = W / 2 - ax - minx
-    dy = H / 2 - ay - miny
+    dx = W / 2 - ax
+    dy = H / 2 - ay
     out = (f'<svg xmlns="http://www.w3.org/2000/svg" version="1.2" baseProfile="tiny" '
            f'width="{W:.1f}" height="{H:.1f}" viewBox="0 0 {W:.1f} {H:.1f}">'
-           f'<g transform="translate({dx:.2f},{dy:.2f})">{inner}</g></svg>')
+           f'<g transform="translate({dx:.2f},{dy:.2f}) scale({k:.5f}) translate({-minx:.2f},{-miny:.2f})">'
+           f'{inner}</g></svg>')
     return out, W, H
 
 
@@ -175,7 +180,9 @@ class SymbolEngine(QObject):
                     v = float(v)
                 except (TypeError, ValueError):
                     continue
-                if k == "speed":
+                if k == "heading":
+                    v = round(v / 5.0) * 5 % 360       # 5-degree steps keep the cache small for moving tracks
+                else:
                     v = f"{v:.0f} km/h"
             else:
                 v = str(v)
@@ -218,6 +225,9 @@ class SymbolEngine(QObject):
                 out = fallback_svg(sidc, opts)
             val = (base64.b64encode(out[0].encode("utf-8")).decode("ascii"), out[1], out[2])
             with self._lock:
+                if len(self._cache) > 6000:            # bound memory on long-running live feeds
+                    self._cache.clear()
+                    self._provisional.clear()
                 self._cache[key] = val
             return val
         with self._lock:
@@ -273,12 +283,12 @@ def register_expressions():
     def _opts(values):
         return dict(zip(OPT_FIELDS, values[1:]))
 
-    @qgsfunction(args=-1, group="BADR", register=False)
+    @qgsfunction(args=-1, group="BADR", register=False, handlesnull=True)
     def milsym(values, feature, parent):
         """milsym(sidc, name, higher, info, dtg, heading, speed, strength) -> base64 SVG of the NATO symbol."""
         return "base64:" + SymbolEngine.instance().render(values[0], _opts(values))[0]
 
-    @qgsfunction(args=-1, group="BADR", register=False)
+    @qgsfunction(args=-1, group="BADR", register=False, handlesnull=True)
     def milsym_size(values, feature, parent):
         """milsym_size(sidc, name, ...) -> symbol image width in px."""
         return float(SymbolEngine.instance().render(values[0], _opts(values))[1])
