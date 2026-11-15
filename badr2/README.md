@@ -19,7 +19,7 @@ under `badr2/`.
 | | BADR 1 (QGIS plugin) | BADR 2 |
 |---|---|---|
 | Form | chat dock inside QGIS | standalone application on the QGIS engine |
-| How the AI acts | writes PyQGIS scripts, runs them, retries on error | calls ~19 structured tools; code is a gated last resort |
+| How the AI acts | writes PyQGIS scripts, runs them, retries on error | calls 18 structured tools; code is a gated last resort |
 | Per-request cost | long prompt (script templates, full map state) every turn | short cached prompt; map state read on demand; routine orders use no model at all |
 | Symbology | none | full NATO APP-6D, 1,647 catalogued entities |
 | Sensors | none | any transport × any protocol, receive-only |
