@@ -1,0 +1,22 @@
+BADR 2
+======
+
+BADR 2 is free software: you can redistribute it and/or modify it under the
+terms of the GNU General Public License as published by the Free Software
+Foundation, either version 2 of the License, or (at your option) any later
+version.  It is distributed WITHOUT ANY WARRANTY; without even the implied
+warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+Full text: https://www.gnu.org/licenses/old-licenses/gpl-2.0.html
+
+BADR 2 is a planning and analysis tool.  Analysis results are estimates from
+terrain models and reported data and must be confirmed before they are relied
+upon.
+
+Bundled components
+------------------
+QGIS, GDAL, Qt, Python and related libraries (when installed with the full
+installer) are distributed under their own licences, found in the "qgis"
+folder; QGIS itself is licensed under the GNU GPL v2 or later.
+
+milsymbol (c) Mans Beckman - MIT licence (app\badr\symbology\vendor).
+APP-6D symbol tables from stanag-app6 - MIT licence.

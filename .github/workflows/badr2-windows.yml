@@ -1,0 +1,174 @@
+# Builds BADR 2 for Windows:
+#   BADR-Setup.exe            self-contained installer (QGIS runtime bundled)
+#   BADR-2-windows-lite.zip   BADR.exe + app only, for PCs that already have QGIS 3.34+
+# The test suite and a start-up smoke test run on Windows before anything is packaged.
+name: BADR 2 Windows build
+
+on:
+  push:
+    branches: ["main", "claude/**"]
+    paths: ["badr2/**", ".github/workflows/badr2-windows.yml"]
+    tags: ["badr2-v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  launcher:
+    name: Native launcher (BADR.exe)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile
+        working-directory: badr2/packaging
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq gcc-mingw-w64-x86-64
+          x86_64-w64-mingw32-windres badr.rc -O coff -o badr.res
+          x86_64-w64-mingw32-gcc -O2 -Wall -municode -mwindows launcher.c badr.res -o BADR.exe
+          file BADR.exe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: launcher
+          path: badr2/packaging/BADR.exe
+          retention-days: 3
+
+  windows:
+    name: Test and package on Windows
+    needs: launcher
+    runs-on: windows-latest
+    timeout-minutes: 120
+    env:
+      QGIS_ROOT: C:\OSGeo4W
+      PYQGIS: C:\OSGeo4W\bin\python-qgis-ltr.bat
+      BADR_QUIET: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore QGIS runtime cache
+        id: qgis-cache
+        uses: actions/cache@v4
+        with:
+          path: C:\OSGeo4W
+          key: osgeo4w-qgis-ltr-v1
+
+      - name: Install QGIS LTR (OSGeo4W)
+        if: steps.qgis-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          Invoke-WebRequest https://download.osgeo.org/osgeo4w/v2/osgeo4w-setup.exe -OutFile osgeo4w-setup.exe
+          $p = Start-Process -Wait -PassThru .\osgeo4w-setup.exe -ArgumentList @(
+            '-q','-k','-A','-s','https://download.osgeo.org/osgeo4w/v2/',
+            '-P','qgis-ltr,python3-pip','-R',$env:QGIS_ROOT,'-l','C:\o4w-packages')
+          if ($p.ExitCode -ne 0) { throw "OSGeo4W setup failed with $($p.ExitCode)" }
+          if (-not (Test-Path $env:PYQGIS)) { throw "QGIS Python launcher not found at $env:PYQGIS" }
+
+      - name: Stage the application
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force stage\app | Out-Null
+          Copy-Item -Recurse badr2\badr stage\app\badr
+          Get-ChildItem stage\app -Recurse -Directory -Filter __pycache__ | Remove-Item -Recurse -Force
+          Copy-Item badr2\README.md stage\README.md
+          Copy-Item badr2\packaging\LICENSE.txt stage\LICENSE.txt
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: launcher
+          path: stage
+
+      - name: Bundle Python packages
+        shell: cmd
+        run: |
+          call "%PYQGIS%" -m pip install --no-warn-script-location --target stage\app\pydeps anthropic earthengine-api pyserial paho-mqtt || exit /b 1
+          call "%PYQGIS%" -m pip install --no-warn-script-location --target testdeps pytest || exit /b 1
+
+      - name: Environment report
+        shell: cmd
+        run: |
+          set PYTHONPATH=%CD%\stage\app\pydeps;%CD%\stage\app
+          call "%PYQGIS%" -c "import sys, qgis.core as c; print('Python', sys.version); print('QGIS', c.Qgis.QGIS_VERSION)"
+          call "%PYQGIS%" -c "from qgis.PyQt.QtQml import QJSEngine; print('QtQml available: full APP-6D rendering')"
+
+      - name: Test suite on Windows
+        id: tests
+        shell: cmd
+        run: |
+          set QT_QPA_PLATFORM=offscreen
+          set PYTHONPATH=%CD%\stage\app\pydeps;%CD%\testdeps
+          cd badr2
+          call "%PYQGIS%" -m pytest tests -q -p no:cacheprovider
+
+      - name: Smoke test BADR.exe (installed QGIS)
+        shell: cmd
+        run: |
+          set QT_QPA_PLATFORM=offscreen
+          start /wait "" stage\BADR.exe --demo --screenshot "%CD%\smoke-lite.png"
+          echo exit code %ERRORLEVEL%
+          type "%LOCALAPPDATA%\BADR\badr.log"
+          if not exist smoke-lite.png exit /b 1
+
+      - name: Package lite zip
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Compress-Archive -Path stage\* -DestinationPath dist\BADR-2-windows-lite.zip
+
+      - name: Bundle the QGIS runtime
+        shell: cmd
+        run: |
+          robocopy "%QGIS_ROOT%" stage\qgis /E /NFL /NDL /NJH /NP /MT:16 /XD var __pycache__ "%QGIS_ROOT%\share\doc" /XF *.pdb
+          if %ERRORLEVEL% GEQ 8 exit /b 1
+          exit /b 0
+
+      - name: Smoke test BADR.exe (bundled runtime only)
+        shell: cmd
+        run: |
+          rem Hide the system QGIS so this proves the bundle is self-contained and relocatable.
+          ren "%QGIS_ROOT%" OSGeo4W_hidden || exit /b 1
+          set QT_QPA_PLATFORM=offscreen
+          set OSGEO4W_ROOT=
+          start /wait "" stage\BADR.exe --demo --screenshot "%CD%\smoke-bundled.png"
+          echo exit code %ERRORLEVEL%
+          type "%LOCALAPPDATA%\BADR\badr.log"
+          ren C:\OSGeo4W_hidden OSGeo4W
+          if not exist smoke-bundled.png exit /b 1
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress; }
+          & $iscc "/DStage=$PWD\stage" "/DOut=$PWD\dist" badr2\packaging\badr.iss
+          if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed" }
+          Get-ChildItem dist | Format-Table Name, @{n='MB';e={[math]::Round($_.Length/1MB)}}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: BADR-Setup
+          path: dist/BADR-Setup.exe
+          compression-level: 0
+          retention-days: 30
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: BADR-2-windows-lite
+          path: dist/BADR-2-windows-lite.zip
+          retention-days: 30
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: smoke-test-screenshots
+          path: smoke-*.png
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/badr2-v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/BADR-Setup.exe
+            dist/BADR-2-windows-lite.zip

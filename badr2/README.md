@@ -123,10 +123,28 @@ python3 -m pip install -r requirements.txt
 ./run_badr.sh --demo            # fictional training scenario
 ```
 
-```bat
-:: Windows (OSGeo4W / QGIS installer)
-run_badr.bat --demo
-```
+### Windows
+
+Two downloads are produced by the **BADR 2 Windows build** workflow
+(GitHub → Actions → latest run → Artifacts; tagged builds `badr2-v*` are also
+published under Releases):
+
+| Download | Use it when |
+|---|---|
+| `BADR-Setup.exe` | You want one installer with everything inside. QGIS is bundled; no admin rights needed. |
+| `BADR-2-windows-lite.zip` | QGIS 3.34+ is already installed. Unzip anywhere and run `BADR.exe`. |
+
+`BADR.exe` is a small native launcher (`packaging/launcher.c`). It looks for
+the bundled runtime first, then an installed QGIS (`BADR_QGIS_ROOT`,
+`OSGEO4W_ROOT`, `Program Files\QGIS *`, `C:\OSGeo4W`), starts BADR without a
+console window and writes `%LOCALAPPDATA%\BADR\badr.log`. The Start menu gets
+"BADR" and "BADR (training demo)".
+
+The installer is not code-signed, so Windows SmartScreen will warn on first
+run ("More info" → "Run anyway"). Sign it with your organisation's certificate
+before wider distribution.
+
+From source, `run_badr.bat --demo` still works with an existing QGIS install.
 
 `--demo` loads a fictional exercise over a public training area and starts a
 simulated UAS and patrol feed over loopback UDP. In **Settings** add an AI
@@ -151,7 +169,7 @@ the main window, fast path and review queue.
 **Not verified here** (no credentials or hardware in the build environment):
 a live Claude or other model conversation, live Earth Engine requests (tested
 against a stand-in module only), real drones/radios/serial devices, MQTT, video
-playback, and Windows/macOS. Treat those paths as written-to-spec, not proven.
+playback, and macOS. Treat those paths as written-to-spec, not proven.
 
 ## Layout
 
