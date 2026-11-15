@@ -68,7 +68,10 @@ def main(argv=None):
             i = names.index(args.mode.upper())
             win.mode_group.button(i).setChecked(True)
             win.stack.setCurrentIndex(i)
-    win.show()
+    if args.screenshot:
+        win.show()
+    else:
+        win.showMaximized()          # planners want the whole screen for the map
     if args.screenshot:
         from qgis.PyQt.QtCore import QTimer
 
