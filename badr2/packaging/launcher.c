@@ -77,16 +77,6 @@ static int find_runtime(const wchar_t *exe_dir, wchar_t *out) {
     return 0;
 }
 
-/* prepend "value;" to an environment variable */
-static void env_prepend(const wchar_t *name, const wchar_t *value) {
-    static wchar_t old[CMDLEN], merged[CMDLEN];
-    DWORD n = GetEnvironmentVariableW(name, old, CMDLEN);
-    if (n > 0 && n < CMDLEN) _snwprintf(merged, CMDLEN, L"%ls;%ls", value, old);
-    else _snwprintf(merged, CMDLEN, L"%ls", value);
-    merged[CMDLEN - 1] = 0;
-    SetEnvironmentVariableW(name, merged);
-}
-
 /* the part of the command line after the program name */
 static const wchar_t *arguments(void) {
     const wchar_t *p = GetCommandLineW();
@@ -99,18 +89,18 @@ static const wchar_t *arguments(void) {
 int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, PWSTR cmdline, int show) {
     (void)inst; (void)prev; (void)cmdline; (void)show;
     static wchar_t exe_dir[PATHLEN], app_dir[PATHLEN], probe[PATHLEN], bat[PATHLEN];
-    static wchar_t log_dir[PATHLEN], log_path[PATHLEN], deps[PATHLEN], cmd[CMDLEN], msg[CMDLEN];
+    static wchar_t log_dir[PATHLEN], log_path[PATHLEN], cmd[CMDLEN], msg[CMDLEN];
 
     GetModuleFileNameW(NULL, exe_dir, PATHLEN);
     wchar_t *slash = wcsrchr(exe_dir, L'\\');
     if (slash) *slash = 0;
 
-    /* the "badr" package sits in <exe>\app (installer) or beside the exe (zip) */
+    /* boot.py and the "badr" package sit in <exe>\app (installer) or beside the exe (zip) */
     _snwprintf(app_dir, PATHLEN, L"%ls\\app", exe_dir);
-    _snwprintf(probe, PATHLEN, L"%ls\\badr\\__main__.py", app_dir);
+    _snwprintf(probe, PATHLEN, L"%ls\\boot.py", app_dir);
     if (!is_file(probe)) {
         wcsncpy(app_dir, exe_dir, PATHLEN - 1);
-        _snwprintf(probe, PATHLEN, L"%ls\\badr\\__main__.py", app_dir);
+        _snwprintf(probe, PATHLEN, L"%ls\\boot.py", app_dir);
         if (!is_file(probe)) {
             MessageBoxW(NULL, L"BADR's program files are missing next to BADR.exe.\n\n"
                         L"Reinstall BADR, or keep BADR.exe in the same folder as the 'badr' folder.",
@@ -128,9 +118,6 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, PWSTR cmdline, int show) {
         return 3;
     }
 
-    env_prepend(L"PYTHONPATH", app_dir);
-    _snwprintf(deps, PATHLEN, L"%ls\\pydeps", app_dir);         /* bundled pip packages */
-    if (is_dir(deps)) env_prepend(L"PYTHONPATH", deps);
     SetEnvironmentVariableW(L"PYTHONUNBUFFERED", L"1");
     SetEnvironmentVariableW(L"PYTHONUTF8", L"1");
 
@@ -145,8 +132,10 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, PWSTR cmdline, int show) {
                           FILE_ATTRIBUTE_NORMAL, NULL);
     }
 
-    /* cmd /s /c ""<bat>" -m badr <args>"  (the QGIS .bat sets up PATH, GDAL, Qt and Python) */
-    _snwprintf(cmd, CMDLEN, L"cmd.exe /d /s /c \"\"%ls\" -m badr %ls\"", bat, arguments());
+    /* cmd /s /c ""<bat>" "<app>\boot.py" <args>"
+     * The QGIS .bat sets up PATH, GDAL, Qt and Python.  It also resets PYTHONPATH, so BADR is
+     * started by script path (boot.py adds the app folder and bundled packages itself). */
+    _snwprintf(cmd, CMDLEN, L"cmd.exe /d /s /c \"\"%ls\" \"%ls\\boot.py\" %ls\"", bat, app_dir, arguments());
     cmd[CMDLEN - 1] = 0;
 
     STARTUPINFOW si;
