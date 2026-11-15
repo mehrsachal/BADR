@@ -126,7 +126,7 @@ jobs:
         run: |
           rem Hide the system QGIS so this proves the bundle is self-contained and relocatable.
           ren "%QGIS_ROOT%" OSGeo4W_hidden || exit /b 1
-          set QT_QPA_PLATFORM=offscreen
+          rem No offscreen override here: this run uses the normal Windows display path, as a user would.
           set OSGEO4W_ROOT=
           start /wait "" stage\BADR.exe --demo --screenshot "%CD%\smoke-bundled.png"
           echo exit code %ERRORLEVEL%
