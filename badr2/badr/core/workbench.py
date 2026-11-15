@@ -16,7 +16,7 @@ from qgis.PyQt.QtCore import QObject, pyqtSignal
 from .store import Operation
 from ..symbology.styles import apply_styles, style_areas, style_lines
 
-GROUPS = ["Live", "COP", "Analysis", "Imagery", "Reference", "Basemap"]
+GROUPS = ["Live", "COP", "Sketch", "Analysis", "Imagery", "Reference", "Basemap"]
 
 BASEMAPS = {
     "OpenStreetMap": "type=xyz&url=https://tile.openstreetmap.org/{z}/{x}/{y}.png&zmax=19&zmin=0",
@@ -43,17 +43,24 @@ class Workbench(QObject):
 
     # ---- operation lifecycle -----------------------------------------
     def open_operation(self, folder=None, name=None):
+        if self.operation is not None:
+            self.operation.close()             # flush pending edits of the operation being left
         self.project.clear()
         self.project.setCrs(QgsCoordinateReferenceSystem("EPSG:3857"))
         root = self.project.layerTreeRoot()
         for g in GROUPS:
             root.addGroup(g)
-        name = name or (os.path.basename(os.path.normpath(folder)) if folder else "Scratch operation")
-        self.operation = Operation(folder, name, parent=self)
+        default = os.path.basename(os.path.normpath(folder)) if folder else "Scratch operation"
+        self.operation = Operation(folder, name or default, parent=self)
+        if name:
+            self.operation.name = name
         from .settings import Settings
         apply_styles(self.operation, float(Settings.get("ui/symbol_scale")))
         for key, group in LAYER_ORDER.items():
             self.add_layer(self.operation.layer(key), group, top=False)
+        if self.operation.user_specs:
+            from .exchange import restore_user_layers
+            restore_user_layers(self)
         self.operation_changed.emit()
         return self.operation
 
@@ -184,8 +191,10 @@ class Workbench(QObject):
             self.zoom_to_bbox(r.xMinimum(), r.yMinimum(), r.xMaximum(), r.yMaximum())
 
     def refresh(self):
+        # canvas.refresh() re-renders only layers that changed (the others come
+        # from the render cache); refreshAllLayers() would redraw everything.
         if self.canvas is not None:
-            self.canvas.refreshAllLayers()
+            self.canvas.refresh()
 
     def describe_layers(self):
         """Compact description of non-COP layers for the AI context."""

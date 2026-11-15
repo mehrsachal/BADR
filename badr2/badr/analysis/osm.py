@@ -74,17 +74,26 @@ def to_layer(theme, payload):
     return layer
 
 
-def import_theme(wb, theme, bbox=None, opener=urllib.request.urlopen):
-    from qgis.core import QgsFillSymbol, QgsLineSymbol, QgsMarkerSymbol, QgsSingleSymbolRenderer
+def fetch_checked(theme, bbox, opener=urllib.request.urlopen):
+    """Network part (worker-thread safe)."""
     if theme not in THEMES:
         raise ValueError(f"unknown theme {theme!r}; available: {sorted(THEMES)}")
-    bbox = bbox or wb.extent_wgs84()
-    if (bbox[2] - bbox[0]) * (bbox[3] - bbox[1]) > 0.5:
+    if not bbox or (bbox[2] - bbox[0]) * (bbox[3] - bbox[1]) > 0.5:
         raise ValueError("area too large for an OSM import; zoom in below about 50 km across")
-    layer = to_layer(theme, fetch(theme, bbox, opener))
+    return fetch(theme, bbox, opener)
+
+
+def load_theme(wb, theme, payload):
+    """GUI part: build and style the layer from a fetched payload."""
+    from qgis.core import QgsFillSymbol, QgsLineSymbol, QgsMarkerSymbol, QgsSingleSymbolRenderer
+    layer = to_layer(theme, payload)
     geom, style = THEMES[theme][1], THEMES[theme][2]
     sym = {"Point": QgsMarkerSymbol, "LineString": QgsLineSymbol, "Polygon": QgsFillSymbol}[geom].createSimple(style)
     layer.setRenderer(QgsSingleSymbolRenderer(sym))
     wb.add_layer(layer, "Reference")
     return {"layer": layer.name(), "features": layer.featureCount(),
             "summary": f"Imported {layer.featureCount()} OSM {theme} features."}
+
+
+def import_theme(wb, theme, bbox=None, opener=urllib.request.urlopen):
+    return load_theme(wb, theme, fetch_checked(theme, bbox or wb.extent_wgs84(), opener))

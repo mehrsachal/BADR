@@ -18,7 +18,7 @@ from urllib.request import Request, urlopen
 
 from ..core.settings import PROVIDERS, Settings
 
-MAX_HISTORY = 60
+MAX_HISTORY = 24      # every kept message is re-sent each turn
 
 
 @dataclass
@@ -47,9 +47,18 @@ class BaseClient:
         self.system = system
         self.tools = tools          # [{name, description, parameters}]
         self.history = []
+        self._deferred = []
 
     def reset(self):
         self.history = []
+        self._deferred = []
+
+    def defer_tool_results(self, results):
+        """Hold tool results back; they ride along with the next user message.
+
+        Used when a tool call was itself the final answer, so no extra model
+        round trip is needed just to close the turn."""
+        self._deferred = list(results)
 
     def send_user(self, text, image_b64=None):
         raise NotImplementedError
@@ -87,10 +96,13 @@ class AnthropicClient(BaseClient):
             raise LlmError("The 'anthropic' package is not installed in this Python. "
                            "Run: python -m pip install anthropic") from exc
         self._anthropic = anthropic
-        self.client = anthropic.Anthropic(api_key=api_key or Settings.api_key("anthropic") or None)
+        # fail fast instead of hanging: one retry, 90 s per request
+        self.client = anthropic.Anthropic(api_key=api_key or Settings.api_key("anthropic") or None,
+                                          timeout=90.0, max_retries=1)
         self.model = model or Settings.model("anthropic")
-        self.max_tokens = int(max_tokens or max(int(Settings.get("ai/max_tokens")), 16000))
-        self._fallbacks = True
+        self.max_tokens = int(max_tokens or Settings.get("ai/max_tokens"))
+        # server-side refusal fallback is not offered for Haiku models
+        self._fallbacks = "haiku" not in self.model
 
     def _tools(self):
         return [{"name": t["name"], "description": t["description"], "input_schema": t["parameters"]}
@@ -124,6 +136,9 @@ class AnthropicClient(BaseClient):
             raise LlmError("Rate limited by the Anthropic API; wait a moment and retry.") from exc
         except a.APIStatusError as exc:
             raise LlmError(f"Anthropic API error {exc.status_code}: {exc.message}") from exc
+        except a.APITimeoutError as exc:
+            raise LlmError("The model did not answer within 90 seconds. Try again, or pick a faster model "
+                           "in Settings.") from exc
         except a.APIConnectionError as exc:
             raise LlmError("Could not reach the Anthropic API (network).") from exc
         # keep the full content (including thinking blocks) for the next turn
@@ -147,20 +162,26 @@ class AnthropicClient(BaseClient):
             reply.text = reply.text or "The model declined this request."
         return reply
 
+    @staticmethod
+    def _result_blocks(results):
+        return [{"type": "tool_result", "tool_use_id": cid, "content": content,
+                 **({"is_error": True} if err else {})} for cid, _name, content, err in results]
+
     def send_user(self, text, image_b64=None):
         content = text
-        if image_b64:
-            content = [{"type": "image", "source": {"type": "base64", "media_type": "image/png",
-                                                    "data": image_b64}},
-                       {"type": "text", "text": text}]
+        if image_b64 or self._deferred:
+            content = self._result_blocks(self._deferred)       # must come first in the turn
+            self._deferred = []
+            if image_b64:
+                content.append({"type": "image", "source": {"type": "base64", "media_type": "image/png",
+                                                            "data": image_b64}})
+            content.append({"type": "text", "text": text})
         self.history.append({"role": "user", "content": content})
         return self._call()
 
     def send_tool_results(self, results):
         # all results for one assistant turn go back in a single user message
-        self.history.append({"role": "user", "content": [
-            {"type": "tool_result", "tool_use_id": cid, "content": content, **({"is_error": True} if err else {})}
-            for cid, _name, content, err in results]})
+        self.history.append({"role": "user", "content": self._result_blocks(results)})
         return self._call()
 
 
@@ -182,7 +203,7 @@ class OpenAICompatClient(BaseClient):
             if self.api_key:
                 req.add_header("Authorization", f"Bearer {self.api_key}")
             try:
-                with urlopen(req, timeout=300) as resp:
+                with urlopen(req, timeout=120) as resp:
                     return json.loads(resp.read().decode("utf-8"))
             except HTTPError as exc:
                 if exc.code in (429, 503) and attempt < 3:
@@ -231,6 +252,9 @@ class OpenAICompatClient(BaseClient):
         if image_b64:
             content = [{"type": "text", "text": text},
                        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{image_b64}"}}]
+        for cid, _name, out, _err in self._deferred:
+            self.history.append({"role": "tool", "tool_call_id": cid, "content": out})
+        self._deferred = []
         self.history.append({"role": "user", "content": content})
         return self._call()
 

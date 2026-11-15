@@ -127,6 +127,22 @@ def _osm(m):
     return "reference_data", {"action": "osm", "name": m.group(1).strip()}
 
 
+_SMALL_TALK = re.compile(r"(hi+|hello+|hey+|yo|salam|assalam\w*( o)? ?alaikum|good (morning|afternoon|evening)|"
+                         r"thanks?( you)?|thank you|thx|ok(ay)?|cool|great|nice|test(ing)?|ping)[ !.]*", re.I)
+
+
+def small_talk(text):
+    """A greeting or acknowledgement needs no model call at all."""
+    t = text.strip()
+    if not _SMALL_TALK.fullmatch(t):
+        return None
+    if re.match(r"th(anks|ank you|x)", t, re.I):
+        return "Any time."
+    if re.match(r"(ok|okay|cool|great|nice)", t, re.I):
+        return "Standing by."
+    return "Ready. Give me an order or a question - try \"brief me\"."
+
+
 def route(text):
     t = text.strip().rstrip(".!")
     if t.startswith("/"):

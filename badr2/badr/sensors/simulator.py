@@ -22,7 +22,7 @@ def _free_port():
 
 
 class Simulator:
-    def __init__(self, manager, lat, lon, rate_hz=2.0):
+    def __init__(self, manager, lat, lon, rate_hz=1.0):
         self.mgr, self.lat, self.lon, self.rate = manager, lat, lon, rate_hz
         self._stop = threading.Event()
         self.ids = []

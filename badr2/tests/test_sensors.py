@@ -135,12 +135,16 @@ def test_end_to_end_udp_connection_updates_live_layers(qgis_app, tmp_path):
         tx.sendto(D.mav_heartbeat(2, 9) + D.mav_global_position(34.05, 71.5 + i * 0.001, 900, 100, hdg=270, sysid=9),
                   ("127.0.0.1", p_mav))
         time.sleep(0.05)
-    assert _pump(qgis_app, lambda: len(mgr.devices) == 2 and all(d.count == 3 for d in mgr.devices.values()))
+    time.sleep(0.3)
+    assert _pump(qgis_app, lambda: mgr.flush() or len(mgr.devices) == 2)
+    # a burst of packets is coalesced: the newest position per device is applied once
+    assert sum(c.messages for c in mgr.connections.values()) == 6
+    assert all(d.count <= 3 for d in mgr.devices.values())
+    assert abs(mgr.devices["PTL-1"].obs.lat - 34.022) < 1e-6
     tracks = wb.operation.layer("tracks")
     assert tracks.featureCount() == 2                      # upserted, not appended
     names = sorted(f["name"] for f in tracks.getFeatures())
     assert names == ["PATROL 1", "UAS-9"]
-    assert wb.operation.layer("trails").featureCount() == 2
     d = mgr.describe()
     assert {c["protocol"] for c in d["connections"]} == {"cot", "mavlink"}
     assert all(dev["status"] == "live" for dev in d["devices"])

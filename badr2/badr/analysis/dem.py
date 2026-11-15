@@ -75,25 +75,29 @@ def register_dem(wb, path, name="Elevation (DEM)"):
     return layer
 
 
+def fetch_elevation(bbox, out, progress=None):
+    """Network part (safe on a worker thread): download a DEM to ``out``; returns the source name."""
+    west, south, east, north = bbox
+    if (east - west) > 3 or (north - south) > 3:
+        raise ValueError("area too large for a planning DEM; zoom in below about 300 km across")
+    try:
+        from ..gee import client as gee
+        if gee.available():
+            gee.download_dem(bbox, out, progress=progress)
+            return "Google Earth Engine (Copernicus GLO-30)"
+    except Exception:
+        pass
+    fetch_terrain_tiles(bbox, out, progress)
+    return "open terrain tiles"
+
+
 def get_elevation(wb, bbox=None, progress=None):
     """Fetch a DEM for the bbox (default: current view) and register it."""
     bbox = bbox or wb.extent_wgs84()
     if not bbox:
         raise ValueError("no area given")
-    west, south, east, north = bbox
-    if (east - west) > 3 or (north - south) > 3:
-        raise ValueError("area too large for a planning DEM; zoom in below about 300 km across")
     out = wb.out_path("dem")
-    source = "open terrain tiles"
-    try:
-        from ..gee import client as gee
-        if gee.available():
-            gee.download_dem(bbox, out, progress=progress)
-            source = "Google Earth Engine (Copernicus GLO-30)"
-        else:
-            raise RuntimeError("gee not configured")
-    except Exception:
-        fetch_terrain_tiles(bbox, out, progress)
+    source = fetch_elevation(bbox, out, progress)
     layer = register_dem(wb, out)
     return {"layer": layer.name(), "source": source, "path": out,
             "summary": f"Elevation loaded from {source} ({layer.width()}x{layer.height()} px)."}

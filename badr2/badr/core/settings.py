@@ -19,7 +19,7 @@ PROVIDERS = {
         "label": "Anthropic (Claude)",
         "wire": "anthropic",
         "endpoint": "https://api.anthropic.com/v1/messages",
-        "models": ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5", "claude-fable-5-2"],
+        "models": ["claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5", "claude-fable-5-2"],
         "needs_key": True,
     },
     "openai": {
@@ -114,6 +114,16 @@ class Settings:
         if not key and provider in _ENV_KEYS:
             key = os.environ.get(_ENV_KEYS[provider], "")
         return key
+
+    @classmethod
+    def migrate(cls):
+        """2.1: the default model changed to the fastest tier; apply it once to
+        installs that still carry the old default (the user can change it back)."""
+        if int(cls.get("settings_version", 1) or 1) < 2:
+            if cls.get("ai/anthropic/model", "") == "claude-opus-5-5":
+                cls.set("ai/anthropic/model", "claude-haiku-5-5")
+            cls.set("ai/effort", "low")
+            cls.set("settings_version", 2)
 
     @classmethod
     def model(cls, provider=None):

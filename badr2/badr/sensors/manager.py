@@ -105,6 +105,7 @@ class DeviceManager(QObject):
         self._rx.connect(self._on_bytes)
         self._st.connect(self._on_status)
         self._dirty = False
+        self._pending = {}
         self._timer = QTimer(self)
         self._timer.setInterval(1000)
         self._timer.timeout.connect(self._tick)
@@ -194,9 +195,12 @@ class DeviceManager(QObject):
         except Exception as exc:      # a malformed packet must never take the app down
             conn.detail = f"decode error: {exc}"
             return
+        # Coalesce: a 10 Hz telemetry stream must not redraw the map 10 times a
+        # second.  Keep only the newest observation per device; _flush() applies
+        # them once per tick.
         for obs in observations:
             conn.messages += 1
-            self.ingest(obs, conn_id)
+            self._pending[obs.uid] = (obs, conn_id)
 
     # ---- devices -------------------------------------------------------
     def ingest(self, obs: Observation, conn_id="manual"):
@@ -215,7 +219,7 @@ class DeviceManager(QObject):
         dev.count += 1
         if obs.video_url:
             dev.video_url = obs.video_url
-        if not dev.trail or geodesy.distance(dev.trail[-1][1], dev.trail[-1][0], obs.lat, obs.lon) > 3:
+        if not dev.trail or geodesy.distance(dev.trail[-1][1], dev.trail[-1][0], obs.lat, obs.lon) > 15:
             dev.trail.append((obs.lon, obs.lat))
             del dev.trail[:-TRAIL_POINTS]
         name = dev.alias or obs.name or obs.uid
@@ -275,7 +279,14 @@ class DeviceManager(QObject):
         self.ingest(dev.obs, dev.conn_id)
         self.devices_changed.emit()
 
+    def flush(self):
+        """Apply the newest queued observation of every device."""
+        pending, self._pending = self._pending, {}
+        for obs, conn_id in pending.values():
+            self.ingest(obs, conn_id)
+
     def _tick(self):
+        self.flush()
         op = self.wb.operation
         changed = False
         for uid, dev in list(self.devices.items()):

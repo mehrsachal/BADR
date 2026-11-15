@@ -21,6 +21,9 @@ from ..symbology import sidc as S
 from ..symbology.palette import GRAPHIC_KINDS, PALETTE
 
 
+RESULT_CAP = 2200
+
+
 class ToolError(Exception):
     """A problem the model can fix by calling the tool differently."""
 
@@ -44,12 +47,14 @@ class Toolbox:
         self._register()
 
     # ------------------------------------------------------------------
-    def _add(self, name, description, params, fn, required=()):
+    def _add(self, name, description, params, fn, required=(), hidden=False):
         self._tools[name] = {"name": name, "description": description,
-                             "parameters": _schema(params, required), "fn": fn}
+                             "parameters": _schema(params, required), "fn": fn, "hidden": hidden}
 
     def specs(self):
-        return [{k: v for k, v in t.items() if k != "fn"} for t in self._tools.values()]
+        """Definitions sent to the model (UI-only tools excluded)."""
+        return [{k: v for k, v in t.items() if k not in ("fn", "hidden")}
+                for t in self._tools.values() if not t["hidden"]]
 
     def names(self):
         return list(self._tools)
@@ -71,8 +76,8 @@ class Toolbox:
             return f"{type(exc).__name__}: {exc}", True
         self.wb.refresh()
         text = out if isinstance(out, str) else json.dumps(out, default=str, ensure_ascii=False)
-        if len(text) > 6000:
-            text = text[:6000] + " ...[truncated]"
+        if len(text) > RESULT_CAP:          # results are re-read on every later turn: keep them small
+            text = text[:RESULT_CAP] + " ...[truncated]"
         return text, False
 
     # ---- location resolution -------------------------------------------
@@ -160,124 +165,91 @@ class Toolbox:
 
     # ------------------------------------------------------------------
     def _register(self):
+        """Tool definitions are sent with every model request, so they are kept
+        deliberately terse: shared conventions (location formats, affiliations)
+        live once in the system prompt instead of being repeated per parameter.
+        Tools flagged ``hidden`` serve the UI only and are never sent."""
         add = self._add
-        add("get_picture",
-            "Read the current common operational picture: units, incidents, control measures, live tracks, "
-            "loaded layers, map view and pending-review items. Call this before reasoning about the situation.",
+        S_, N_, I_ = {"type": "string"}, {"type": "number"}, {"type": "integer"}
+        O_ = {"type": "object"}
+        LIST = {"type": "array", "items": S_}
+
+        add("get_picture", "Read what is on the map: units, incidents, measures, tracks, layers, view.",
             {}, self.get_picture)
-        add("go_to", "Move the map to a location.",
-            {"location": LOC, "radius_m": {"type": "number", "description": "half-width of the view, default 3000"}},
-            self.go_to, ["location"])
-        add("find_symbol",
-            "Search the full NATO APP-6D catalog (1,600+ entities: units, equipment, installations, activities, "
-            "control measures) for the right symbol. Returns symbol_set + entity codes.",
-            {"query": {"type": "string"},
-             "symbol_sets": {"type": "array", "items": {"type": "string", "enum": sorted(S.SYMBOL_SETS)}}},
-            self.find_symbol, ["query"])
-        add("place_symbol",
-            "Place a NATO APP-6D symbol (unit, equipment, installation, human-terrain point, control point) on the "
-            "map. 'symbol' may be a 20-digit SIDC, a palette label, or a plain description such as 'mechanized "
-            "infantry', 'safe house', 'checkpoint'.",
-            {"location": LOC, "symbol": {"type": "string"},
-             "affiliation": {"type": "string", "enum": sorted(S.AFFILIATIONS)},
-             "name": {"type": "string", "description": "unique designation shown beside the symbol"},
-             "echelon": {"type": "string", "enum": sorted(set(S.ECHELONS) - {"none"})},
-             "higher": {"type": "string", "description": "higher formation"},
-             "status": {"type": "string", "enum": ["present", "planned"]},
-             "remarks": {"type": "string"}},
+        add("go_to", "Move the map.", {"location": S_, "radius_m": N_}, self.go_to, ["location"])
+        add("place_symbol", "Place a NATO APP-6D symbol. symbol: plain words ('mechanized infantry', 'safe "
+            "house', 'checkpoint') or a 20-digit SIDC.",
+            {"location": S_, "symbol": S_, "affiliation": S_, "name": S_, "echelon": S_, "higher": S_,
+             "status": {"type": "string", "enum": ["present", "planned"]}, "remarks": S_},
             self.place_symbol, ["location", "symbol"])
-        add("log_incident",
-            "Record an incident / SIGACT (IED, shooting, kidnapping, demonstration ...) for pattern analysis.",
-            {"location": LOC, "type": {"type": "string", "description": "e.g. 'IED explosion', 'sniping', 'arson'"},
-             "dtg": {"type": "string", "description": "DDHHMMZMONYY or ISO time; default now"},
-             "description": {"type": "string"}, "casualties": {"type": "integer"},
-             "affiliation": {"type": "string", "enum": sorted(S.AFFILIATIONS)},
-             "reliability": {"type": "string", "description": "source reliability A-F"},
-             "credibility": {"type": "string", "description": "information credibility 1-6"}},
+        add("log_incident", "Record an incident (IED, shooting, kidnapping ...). dtg: DDHHMMZMONYY or ISO.",
+            {"location": S_, "type": S_, "dtg": S_, "description": S_, "casualties": I_, "affiliation": S_},
             self.log_incident, ["location", "type"])
-        add("draw_graphic",
-            "Draw a tactical graphic / control measure. Lines need 2+ points; areas need 3+ points, or one point "
-            "with radius_m for a circular area.",
-            {"kind": {"type": "string", "enum": sorted(k for k in GRAPHIC_KINDS
-                                                       if k not in ("los_visible", "los_hidden", "grg", "analysis"))},
-             "points": {"type": "array", "items": LOC}, "radius_m": {"type": "number"},
-             "name": {"type": "string"}, "affiliation": {"type": "string", "enum": ["friend", "hostile", "neutral"]},
-             "status": {"type": "string", "enum": ["present", "planned"]}, "remarks": {"type": "string"}},
+        kinds = sorted(k for k in GRAPHIC_KINDS if k not in ("los_visible", "los_hidden", "grg", "analysis",
+                                                             "hotspot", "hlz_candidate", "range_ring"))
+        add("draw_graphic", "Draw a control measure. Lines: 2+ points. Areas: 3+ points, or 1 point + radius_m.",
+            {"kind": {"type": "string", "enum": kinds}, "points": LIST, "radius_m": N_, "name": S_,
+             "affiliation": S_, "status": {"type": "string", "enum": ["present", "planned"]}},
             self.draw_graphic, ["kind", "points"])
-        add("update_feature", "Change or move something on the map, identified by uid.",
-            {"uid": {"type": "string"}, "location": LOC, "name": {"type": "string"},
-             "affiliation": {"type": "string", "enum": sorted(S.AFFILIATIONS)},
-             "status": {"type": "string", "enum": ["present", "planned", "damaged", "destroyed"]},
-             "remarks": {"type": "string"}},
-            self.update_feature, ["uid"])
-        add("delete_feature", "Remove a feature from the map by uid.", {"uid": {"type": "string"}},
-            self.delete_feature, ["uid"])
-        add("terrain",
-            "Terrain analysis on the loaded elevation model. analysis: viewshed (what a point can see), "
-            "line_of_sight (A to B), mobility (GO/SLOW-GO/NO-GO), slope, landing_zones (HLZ candidates), route "
-            "(least-cost cross-country route with time), range_rings, grid (GRG), cordon (inner/outer rings), "
-            "elevation (height at a point). Needs get_elevation first, except range_rings, grid and cordon.",
-            {"analysis": {"type": "string", "enum": ["viewshed", "line_of_sight", "mobility", "slope", "landing_zones",
-                                                     "route", "range_rings", "grid", "cordon", "elevation"]},
-             "location": LOC, "location2": LOC,
-             "radius_m": {"type": "number"}, "observer_height": {"type": "number"},
+        add("sketch", "Free drawing that is not a NATO symbol (note, marker, line, area). Creates the layer "
+            "if it does not exist.",
+            {"layer": S_, "geometry": {"type": "string", "enum": ["point", "line", "polygon"]},
+             "points": LIST, "name": S_, "notes": S_, "color": S_}, self.sketch, ["layer", "points"])
+        add("edit_feature", "Change, move or delete a feature by uid.",
+            {"uid": S_, "location": S_, "name": S_, "affiliation": S_, "status": S_, "remarks": S_,
+             "delete": {"type": "boolean"}}, self.edit_feature, ["uid"])
+        add("terrain", "Terrain analysis. load_elevation first (not needed for range_rings, grid, cordon). "
+            "line_of_sight and route need location and location2.",
+            {"analysis": {"type": "string", "enum": ["load_elevation", "viewshed", "line_of_sight", "mobility",
+                                                     "slope", "landing_zones", "route", "range_rings", "grid",
+                                                     "cordon", "elevation"]},
+             "location": S_, "location2": S_, "radius_m": N_, "observer_height": N_,
              "mover": {"type": "string", "enum": sorted(terrain.MOBILITY)},
-             "radii_m": {"type": "array", "items": {"type": "number"}},
-             "cell_m": {"type": "number"}, "max_slope": {"type": "number"},
-             "min_diameter_m": {"type": "number"}, "inner_m": {"type": "number"}, "outer_m": {"type": "number"},
-             "name": {"type": "string"}},
+             "radii_m": {"type": "array", "items": N_}, "cell_m": N_, "name": S_},
             self.terrain, ["analysis"])
-        add("get_elevation",
-            "Download an elevation model (DEM) for an area so terrain analysis can run. Default area: current view.",
-            {"area": LOC, "radius_m": {"type": "number"}}, self.get_elevation)
-        add("incident_analysis",
-            "Analyse recorded incidents. hotspots: spatial clusters; temporal: hour/day pattern and peak windows; "
-            "route_threat: incidents within a corridor of each drawn route.",
+        add("incidents", "Incident analysis: hotspots (clusters), temporal (when), route_threat (per route).",
             {"analysis": {"type": "string", "enum": ["hotspots", "temporal", "route_threat"]},
-             "type_filter": {"type": "string"}, "distance_m": {"type": "number"},
-             "min_incidents": {"type": "integer"}},
-            self.incident_analysis, ["analysis"])
-        add("imagery",
-            "Google Earth Engine data. action=list shows products; add streams a product for the view (optionally a "
-            "date range); change builds a before/after change-detection layer (method optical or sar); download "
-            "fetches pixels for local analysis.",
-            {"action": {"type": "string", "enum": ["list", "add", "change", "download"]},
-             "product": {"type": "string"}, "start": {"type": "string", "description": "YYYY-MM-DD"},
-             "end": {"type": "string"}, "before_start": {"type": "string"}, "before_end": {"type": "string"},
-             "after_start": {"type": "string"}, "after_end": {"type": "string"},
-             "method": {"type": "string", "enum": ["optical", "sar"]}, "area": LOC, "radius_m": {"type": "number"}},
-            self.imagery, ["action"])
-        add("reference_data",
-            "Load reference layers. action=basemap sets the background map; action=osm imports OpenStreetMap "
-            "features (roads, waterways, bridges, buildings, places, health, schools, worship, government, police, "
-            "fuel, towers) for the view.",
-            {"action": {"type": "string", "enum": ["basemap", "osm"]}, "name": {"type": "string"},
-             "area": LOC, "radius_m": {"type": "number"}},
+             "type_filter": S_, "distance_m": N_}, self.incident_analysis, ["analysis"])
+        add("imagery", "Earth Engine: list products, add one to the map, change detection (optical|sar), "
+            "or download pixels. Dates YYYY-MM-DD.",
+            {"action": {"type": "string", "enum": ["list", "add", "change", "download"]}, "product": S_,
+             "start": S_, "end": S_, "before_start": S_, "before_end": S_, "after_start": S_,
+             "after_end": S_, "method": S_}, self.imagery, ["action"])
+        add("reference", "Background data. basemap: name. osm: roads, waterways, bridges, buildings, places, "
+            "health, schools, worship, government, police, fuel, towers.",
+            {"action": {"type": "string", "enum": ["basemap", "osm"]}, "name": S_},
             self.reference_data, ["action", "name"])
-        add("search_gis_tools",
-            "Search every geoprocessing algorithm in the QGIS engine (hundreds: buffers, overlays, raster "
-            "maths, networks, statistics ...) when no dedicated tool fits.",
-            {"query": {"type": "string"}}, self.search_gis_tools, ["query"])
-        add("describe_gis_tool", "Get the parameters of a QGIS algorithm before running it.",
-            {"id": {"type": "string"}}, self.describe_gis_tool, ["id"])
-        add("run_gis_tool",
-            "Run any QGIS algorithm by id. Layer parameters take layer names; output parameters may be omitted "
-            "(results are saved to the operation folder and added to the map).",
-            {"id": {"type": "string"}, "parameters": {"type": "object"}}, self.run_gis_tool, ["id", "parameters"])
-        add("sensors",
-            "Sensor and device links (receive-only). status: connections and live devices; options: available "
-            "transports, protocols and presets; connect: open a link (transport + protocol, or a preset); "
-            "disconnect: close one by id.",
+        add("qgis", "Any other GIS operation through the QGIS engine: search by words, describe by id, "
+            "run by id with parameters (layers by name; outputs optional).",
+            {"action": {"type": "string", "enum": ["search", "describe", "run"]}, "query": S_, "id": S_,
+             "parameters": O_}, self.qgis, ["action"])
+        add("sensors", "Receive-only sensor links: status, options, connect (preset, or transport + "
+            "protocol), disconnect (id).",
             {"action": {"type": "string", "enum": ["status", "options", "connect", "disconnect"]},
-             "preset": {"type": "string"}, "name": {"type": "string"},
-             "transport": {"type": "string"}, "transport_options": {"type": "object"},
-             "protocol": {"type": "string"}, "protocol_options": {"type": "object"},
-             "id": {"type": "string"}},
-            self.sensors, ["action"])
-        add("run_pyqgis",
-            "Last resort: run PyQGIS code when no other tool can do the job. The operator is asked to approve the "
-            "code first. Available: wb (workbench), operation, iface, processing, BADR_WORKSPACE.",
-            {"code": {"type": "string"}, "explanation": {"type": "string"}}, self.run_pyqgis, ["code", "explanation"])
+             "preset": S_, "name": S_, "transport": S_, "transport_options": O_, "protocol": S_,
+             "protocol_options": O_, "id": S_}, self.sensors, ["action"])
+        add("export", "Export layers to a GIS format: gpkg, shp, geojson, kml, csv, gdb. layers: names, "
+            "default the whole picture.",
+            {"format": S_, "layers": LIST}, self.export, ["format"])
+        add("run_pyqgis", "Last resort: PyQGIS code (operator approves). Has wb, operation, iface, processing.",
+            {"code": S_, "explanation": S_}, self.run_pyqgis, ["code", "explanation"])
+        add("brief", "Give your answer. 1-5 beats, each one short sentence (max 16 words) the operator can "
+            "play back; 'at' is the place or uid the map should fly to for that sentence.",
+            {"beats": {"type": "array", "items": {"type": "object", "properties": {
+                "say": S_, "at": S_, "zoom_m": N_}, "required": ["say"]}}},
+            self.brief, ["beats"])
+
+        # ---- UI-only entry points (not sent to the model) -------------------
+        hid = lambda *a, **k: self._add(*a, hidden=True, **k)       # noqa: E731
+        hid("find_symbol", "", {}, self.find_symbol)
+        hid("update_feature", "", {}, self.update_feature)
+        hid("delete_feature", "", {}, self.delete_feature)
+        hid("get_elevation", "", {}, self.get_elevation)
+        hid("incident_analysis", "", {}, self.incident_analysis)
+        hid("reference_data", "", {}, self.reference_data)
+        hid("search_gis_tools", "", {}, self.search_gis_tools)
+        hid("describe_gis_tool", "", {}, self.describe_gis_tool)
+        hid("run_gis_tool", "", {}, self.run_gis_tool)
 
     # ---- implementations -------------------------------------------------
     def get_picture(self):
@@ -407,6 +379,8 @@ class Toolbox:
             if not loc:
                 raise ToolError(f"{analysis} needs '{label}'")
             return self.locate(loc)
+        if analysis == "load_elevation":
+            return self.get_elevation(location, radius_m)
         if analysis == "viewshed":
             lat, lon = need(location)
             return terrain.viewshed(wb, lat, lon, observer_height, radius_m=float(radius_m or 5000), name=name)
@@ -511,10 +485,8 @@ class Toolbox:
         if action == "status":
             return self.devices.describe()
         if action == "options":
-            return {"transports": {k: {"label": t.label, "options": {o: h for o, (_d, h) in t.options.items()}}
-                                   for k, t in TRANSPORTS.items()},
-                    "protocols": {k: {"label": d.label, "options": {o: h for o, (_d, h) in d.options.items()}}
-                                  for k, d in DECODERS.items()},
+            return {"transports": {k: list(t.options) for k, t in TRANSPORTS.items()},
+                    "protocols": {k: list(d.options) for k, d in DECODERS.items()},
                     "presets": list(PRESETS)}
         if action == "connect":
             prof = {}
@@ -554,3 +526,81 @@ class Toolbox:
         if not ok:
             raise ToolError(out)
         return out
+
+    def edit_feature(self, uid, location=None, name=None, affiliation=None, status=None, remarks=None,
+                     delete=False):
+        if delete:
+            return self.delete_feature(uid)
+        return self.update_feature(uid, location, name, affiliation, status, remarks)
+
+    def qgis(self, action, query=None, id=None, parameters=None):
+        if action == "search":
+            hits = CapabilityIndex.instance().search(query or "", 8)
+            return {"matches": [{"id": h["id"], "name": h["name"]} for h in hits]} if hits else "No match."
+        if not id:
+            raise ToolError(f"{action} needs 'id'")
+        if action == "describe":
+            d = CapabilityIndex.describe(id)
+            d["help"] = d["help"][:300]
+            d.pop("outputs", None)
+            return d
+        if action == "run":
+            return CapabilityIndex.run(id, parameters or {}, self.wb)
+        raise ToolError(f"unknown action {action!r}")
+
+    def sketch(self, layer, points, geometry=None, name="", notes="", color=None):
+        from ..core import exchange
+        pts = [self.locate(p) for p in (points or [])]
+        if not pts:
+            raise ToolError("sketch needs at least one point")
+        target = next((l for l in exchange.user_layers(self.wb) if l.name().lower() == str(layer).lower()), None)
+        if target is None:
+            geometry = geometry or ("point" if len(pts) == 1 else "line")
+            target = exchange.create_user_layer(self.wb, layer, geometry, color or "#ffd24a")
+        exchange.add_user_feature(self.wb, target, pts, name, notes)
+        return f"Added to sketch layer '{target.name()}' ({target.featureCount()} features)."
+
+    def export(self, format, layers=None, folder=None, selected_only=False):
+        import os
+        from ..core import exchange
+        if layers:
+            chosen = []
+            for n in layers:
+                lyr = self.wb.find_layer(n)
+                if lyr is None:
+                    raise ToolError(f"no layer named {n!r}")
+                chosen.append(lyr)
+        else:
+            cop = [self.wb.operation.layer(k) for k in ("units", "incidents", "lines", "areas", "detections")]
+            chosen = [l for l in cop + exchange.user_layers(self.wb) if l.featureCount() > 0]
+        if not folder:
+            base = self.wb.operation.folder or os.path.join(os.path.expanduser("~"), "BADR")
+            folder = os.path.join(base, "export")
+        folder = os.path.normpath(folder)
+        files = exchange.export_layers(chosen, folder, format, self.wb.operation.name, selected_only)
+        return {"files": files, "summary": f"Exported {len(chosen)} layer(s) to {folder}."}
+
+    def brief(self, beats):
+        """Validated here; the UI turns the beats into a playable story."""
+        out = []
+        for b in (beats or [])[:6]:
+            say = str((b or {}).get("say", "")).strip()
+            if not say:
+                continue
+            beat = {"say": say}
+            at = (b or {}).get("at")
+            if at:
+                try:
+                    lat, lon = self.locate(at)
+                    beat["lat"], beat["lon"] = lat, lon
+                    beat["zoom_m"] = float(b.get("zoom_m") or 1500)
+                    key, feat = self.wb.operation.find_any(str(at))
+                    if feat is not None:
+                        beat["uid"] = str(at)
+                except (ToolError, ValueError):
+                    pass                      # a sentence without a resolvable place still gets shown
+            out.append(beat)
+        if not out:
+            raise ToolError("brief needs at least one beat with 'say'")
+        self.last_brief = out
+        return "shown"

@@ -40,7 +40,10 @@ def ok(box, tool, /, **args):
 # ---- tool layer -----------------------------------------------------------
 def test_tool_specs_are_valid_json_schema(box):
     specs = box.specs()
-    assert len(specs) >= 18
+    assert 12 <= len(specs) <= 16
+    # every definition is re-sent on each model call: keep the whole set small
+    assert len(json.dumps(specs)) / 4 < 2000, "tool definitions grew past the token budget"
+    assert not any(s["name"] in ("find_symbol", "update_feature") for s in specs)   # UI-only tools stay local
     for s in specs:
         assert s["parameters"]["type"] == "object" and s["description"]
         assert set(s["parameters"]["required"]) <= set(s["parameters"]["properties"])
@@ -224,7 +227,8 @@ def test_agent_stops_runaway_loops_and_reports_llm_errors(box):
 def test_system_prompt_states_scope_and_review():
     from badr.ai.agent import build_system_prompt
     p = build_system_prompt()
-    assert "planning and analysis" in p and "pending review" in p and "receive-only" in p
+    assert "planning and analysis" in p and "review" in p and "receive-only" in p
+    assert len(p) / 4 < 400, "system prompt grew past the token budget"
 
 
 # ---- wire formats ---------------------------------------------------------
@@ -277,7 +281,7 @@ def test_anthropic_client_uses_sdk_and_keeps_full_content(monkeypatch):
                        SimpleNamespace(type="tool_use", id="tu1", name="go_to", input={"location": "view"})]
             return SimpleNamespace(content=content, stop_reason="tool_use")
         return SimpleNamespace(content=[SimpleNamespace(type="text", text="Done.")], stop_reason="end_turn")
-    c = AnthropicClient("SYS", TOOLS, api_key="test-key")
+    c = AnthropicClient("SYS", TOOLS, api_key="test-key", model="claude-opus-5-5")
     monkeypatch.setattr(c.client.beta.messages, "create", fake_create)
     r = c.send_user("go")
     assert r.stop == "tool_use" and r.text == "Moving." and r.tool_calls[0].id == "tu1"
@@ -288,6 +292,7 @@ def test_anthropic_client_uses_sdk_and_keeps_full_content(monkeypatch):
     assert first["tools"][0]["input_schema"]["type"] == "object"
     assert "thinking" not in first and "temperature" not in first and "tool_choice" not in first
     assert first["fallbacks"] == "default"
+    assert first["cache_control"] == {"type": "ephemeral"} and first["output_config"]["effort"] in ("low", "medium", "high")
     msgs = second["messages"]
     assert [b.type for b in msgs[1]["content"]] == ["thinking", "text", "tool_use"]   # replayed unchanged
     results = msgs[2]["content"]
@@ -295,7 +300,7 @@ def test_anthropic_client_uses_sdk_and_keeps_full_content(monkeypatch):
 
 
 def test_anthropic_refusal_is_reported_not_executed(monkeypatch):
-    c = AnthropicClient("SYS", TOOLS, api_key="test-key")
+    c = AnthropicClient("SYS", TOOLS, api_key="test-key", model="claude-opus-5-5")
     monkeypatch.setattr(c.client.beta.messages, "create", lambda **kw: SimpleNamespace(
         content=[SimpleNamespace(type="tool_use", id="t", name="go_to", input={})], stop_reason="refusal"))
     r = c.send_user("x")
@@ -337,3 +342,82 @@ def test_gee_products_build_tile_layers(wb, monkeypatch):
     assert "sar" in r["summary"]
     with pytest.raises(ValueError):
         gee.build("nonsense", (0, 0, 1, 1))
+
+
+def test_default_model_is_the_fast_tier_and_skips_unsupported_fallbacks(monkeypatch):
+    calls = []
+    c = AnthropicClient("SYS", TOOLS, api_key="test-key")
+    assert c.model == "claude-haiku-5-5"
+    monkeypatch.setattr(c.client.messages, "create", lambda **kw: calls.append(kw) or SimpleNamespace(
+        content=[SimpleNamespace(type="text", text="ok")], stop_reason="end_turn",
+        usage=SimpleNamespace(input_tokens=1200, output_tokens=9, cache_read_input_tokens=0,
+                              cache_creation_input_tokens=0)))
+    r = c.send_user("hi")
+    assert "fallbacks" not in calls[0] and "betas" not in calls[0]
+    assert (r.tokens_in, r.tokens_out) == (1200, 9)
+
+
+def test_deferred_tool_results_ride_with_the_next_user_message(monkeypatch):
+    calls = []
+
+    def fake(**kw):
+        calls.append([dict(m) for m in kw["messages"]])
+        if len(calls) == 1:
+            return SimpleNamespace(content=[SimpleNamespace(type="tool_use", id="b1", name="brief", input={})],
+                                   stop_reason="tool_use")
+        return SimpleNamespace(content=[SimpleNamespace(type="text", text="ok")], stop_reason="end_turn")
+    c = AnthropicClient("SYS", TOOLS, api_key="test-key")
+    monkeypatch.setattr(c.client.messages, "create", fake)
+    c.send_user("brief me")
+    c.defer_tool_results([("b1", "brief", "shown", False)])
+    assert len(calls) == 1                                   # no extra model call to close the turn
+    c.send_user("and now?")
+    last = calls[1][-1]["content"]
+    assert last[0]["type"] == "tool_result" and last[0]["tool_use_id"] == "b1" and last[-1]["text"] == "and now?"
+
+
+def test_brief_ends_the_request_in_one_model_call(box, wb):
+    from badr.ai.agent import Agent
+    wb.operation.add_point("units", LAT, LON, {"sidc": "10062000001117000000", "name": "OBJ FOX"})
+    client = ScriptedClient([Reply(tool_calls=[
+        ToolCall("1", "terrain", {"analysis": "range_rings", "location": "OBJ FOX", "radii_m": [500]}),
+        ToolCall("2", "brief", {"beats": [{"say": "Ring drawn around OBJ FOX.", "at": "OBJ FOX", "zoom_m": 900},
+                                          {"say": "No elevation loaded yet."}]})], stop="tool_use",
+        tokens_in=1500, tokens_out=60)])
+    client.deferred = None
+    client.defer_tool_results = lambda results: setattr(client, "deferred", results)
+    events = []
+    out = Agent(box, client=client, on_event=lambda k, d: events.append((k, d))).run("ring OBJ FOX")
+    assert out.startswith("Ring drawn")
+    story = dict(events)["story"]
+    assert story[0]["lat"] == pytest.approx(LAT) and story[0]["zoom_m"] == 900 and "lat" not in story[1]
+    assert dict(events)["usage"]["calls"] == 1 and len(client.sent) == 1
+    assert [r[1] for r in client.deferred] == ["terrain", "brief"]
+
+
+def test_brief_does_not_hide_a_failed_action(box):
+    from badr.ai.agent import Agent
+    client = ScriptedClient([
+        Reply(tool_calls=[ToolCall("1", "terrain", {"analysis": "viewshed", "location": "view"}),
+                          ToolCall("2", "brief", {"beats": [{"say": "Viewshed done."}]})], stop="tool_use"),
+        Reply(tool_calls=[ToolCall("3", "brief", {"beats": [{"say": "No elevation loaded; load it first."}]})],
+              stop="tool_use")])
+    client.defer_tool_results = lambda results: None
+    events = []
+    out = Agent(box, client=client, on_event=lambda k, d: events.append((k, d))).run("viewshed")
+    assert "No elevation" in out and len(client.sent) == 2      # the model saw the error and corrected itself
+
+
+def test_sketch_export_and_qgis_tools(box, wb, tmp_path):
+    ok(box, "sketch", layer="Key terrain", points=["view"], name="Hill 402", notes="dominates RTE IRON")
+    ok(box, "sketch", layer="Key terrain", points=[f"{LAT + 0.01}, {LON}"], name="Saddle")
+    from badr.core import exchange
+    (layer,) = exchange.user_layers(wb)
+    assert layer.featureCount() == 2 and layer.geometryType() == 0
+    ok(box, "place_symbol", location="view", symbol="infantry", affiliation="friend", name="A")
+    r = ok(box, "export", format="geojson", folder=str(tmp_path / "out"))
+    assert len(r["files"]) == 2 and all(f.endswith(".geojson") for f in r["files"])
+    hits = ok(box, "qgis", action="search", query="buffer")
+    assert hits["matches"][0]["id"] == "native:buffer"
+    text, err = box.call("export", {"format": "dwg"})
+    assert err and "unknown format" in text

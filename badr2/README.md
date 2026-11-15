@@ -19,7 +19,7 @@ under `badr2/`.
 | | BADR 1 (QGIS plugin) | BADR 2 |
 |---|---|---|
 | Form | chat dock inside QGIS | standalone application on the QGIS engine |
-| How the AI acts | writes PyQGIS scripts, runs them, retries on error | calls 18 structured tools; code is a gated last resort |
+| How the AI acts | writes PyQGIS scripts, runs them, retries on error | calls 16 terse structured tools; code is a gated last resort |
 | Per-request cost | long prompt (script templates, full map state) every turn | short cached prompt; map state read on demand; routine orders use no model at all |
 | Symbology | none | full NATO APP-6D, 1,647 catalogued entities |
 | Sensors | none | any transport × any protocol, receive-only |
@@ -32,39 +32,54 @@ prompt plus the whole map state, and the model answered by writing code that
 often needed several retry rounds. BADR 2 changes the mechanics:
 
 - **Structured tools, not generated code.** "Viewshed from OP 1, 4 km" is one
-  ~30-token tool call instead of a 60-line script.
-- **Zero-token fast path** (`badr/ai/quick.py`). Orders with a fixed shape —
-  go to, range rings, viewshed, line of sight, route, mobility, landing zones,
-  grid, cordon, hotspots, basemap — are parsed locally and executed instantly.
-  Anything that does not match exactly goes to the assistant.
-- **Prompt caching.** Tools, system prompt and conversation prefix are cached,
-  so follow-up turns re-read them at a fraction of the cost and latency.
-- **Context on demand.** The map state is not attached to every message; the
-  model calls `get_picture` once when it needs it.
-- **Parallel tool calls.** Independent actions go out in one round trip.
-- **Response-depth setting** (Fast / Balanced / Deep) and a per-request token
-  readout in the assistant panel, so cost is visible.
+  short tool call instead of a 60-line script.
+- **Nothing sent that is not needed.** Tool definitions and the system prompt
+  are sent with every request, so they are kept to about 2,000 tokens in
+  total; a test fails the build if they grow past the budget.
+- **Zero-token fast path** (`badr/ai/quick.py`). Greetings, and orders with a
+  fixed shape (go to, range rings, viewshed, line of sight, route, mobility,
+  landing zones, grid, cordon, hotspots, basemap), are handled locally.
+- **One model call per request where possible.** The assistant answers through
+  a `brief` tool in the same turn as its actions, so there is no second round
+  trip just to phrase the reply.
+- **Short answers.** At most five sentences of sixteen words, playable on the map.
+- **Context on demand.** The map state is read with `get_picture` only when needed.
+- **Fast default model** with a Fast / Balanced / Deep setting, a 90-second
+  timeout, and a per-request token readout.
 
 These are design properties; I have not benchmarked them against BADR 1 with a
 live model in this environment (no API key here).
 
 ## The screen
 
-Seven modes replace QGIS' menus, toolbars and docks:
+Eight modes replace QGIS' menus, toolbars and docks:
 
 | Mode | What it is for |
 |---|---|
-| **Picture** | layers, basemap, open/new operation, export |
+| **Picture** | layers, attribute tables, basemap, open/new operation, export |
 | **Plan** | APP-6D symbol palette and search, control lines and areas |
+| **Draw** | your own point / line / area layers, notes and sketches |
 | **Terrain** | elevation, viewshed, line of sight, mobility, routes, landing zones, range rings, GRG, cordon |
 | **Intel** | incident logging, hotspots, pattern-of-life matrix, route threat |
 | **Imagery** | Earth Engine products, change detection, OpenStreetMap reference data |
 | **Sensors** | connections, live devices, classification, video |
 | **Tools** | every QGIS processing algorithm, searchable, grouped by planning task |
 
-The right sidebar holds the review queue, the assistant conversation and the
-chat bar (Ctrl+K). Right-click the map for actions at a point. Coordinates are
-MGRS by default.
+**On the map:** click selects a feature and shows its attributes in the
+inspector (editable in place); Ctrl+click adds to the selection; Shift+drag
+box-selects; drag pans; right-click opens actions for that feature or spot;
+Delete removes the selection. The map toolbar has select, measure, zoom,
+attribute table and export.
+
+**Right sidebar:** inspector, review queue, and the assistant. Answers arrive
+as a few short sentences; **Play** flies the map to each one in turn.
+
+**Export:** Picture → Export data writes any layers to GeoPackage, Shapefile,
+GeoJSON, KML, CSV or a file geodatabase (WGS84). NATO symbols carry their SIDC
+so other systems can re-symbolise them.
+
+Operations are held in memory and autosaved to `cop.gpkg` in the operation
+folder (atomic write) a moment after each change and on exit.
 
 ## Capabilities
 
@@ -157,7 +172,7 @@ rendering; without it BADR falls back to a basic built-in frame renderer.
 ## Tests
 
 ```sh
-QT_QPA_PLATFORM=offscreen python3 -m pytest tests -q     # 57 tests
+QT_QPA_PLATFORM=offscreen python3 -m pytest tests -q     # 85 tests
 ```
 
 Covered: MGRS against a reference library; symbol codes, search and rendering;

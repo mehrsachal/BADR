@@ -30,11 +30,13 @@ def pump(app, cond, timeout=8.0):
 
 def test_window_builds_all_seven_modes(win):
     from badr.ui.panels import MODES
-    assert [m[0] for m in MODES] == ["PICTURE", "PLAN", "TERRAIN", "INTEL", "IMAGERY", "SENSORS", "TOOLS"]
-    assert win.stack.count() == 7
-    for i in range(7):
+    assert [m[0] for m in MODES] == ["PICTURE", "PLAN", "DRAW", "TERRAIN", "INTEL", "IMAGERY", "SENSORS", "TOOLS"]
+    assert win.stack.count() == 8
+    assert list(win.panels.made) == ["PICTURE"]              # the rest are built on first use
+    for i in range(8):
         win.mode_group.button(i).click()
         assert win.stack.currentIndex() == i
+    assert len(win.panels.made) == 8
     assert win.panels["PLAN"].list.count() > 5
     win.panels["PLAN"].search.setText("IED")
     assert win.panels["PLAN"].list.count() > 0
@@ -106,16 +108,17 @@ def test_agent_runs_off_thread_and_tools_run_on_gui_thread(win, qgis_app, monkey
     assert pump(qgis_app, lambda: not win._busy)
     assert seen["llm_thread"] is not gui_thread and seen["tool_thread"] is gui_thread
     assert win.wb.operation.layer("units").featureCount() == 1
-    assert win.review_list.count() == 1 and "1 PENDING" in win.review_head.text()
+    assert win.review_list.count() == 1 and "1 pending" in win.review_head.text()
     text = win.feed.toPlainText()
-    assert "BLUF" in text and "900 cached" in text and "2 model call(s)" in text
+    assert "900 cached" in text and "2 call(s)" in text
+    assert "BLUF" in win.story.beats[0]["say"]               # the answer is shown as playable beats
     win._resolve(True)
     assert win.review_list.count() == 0
 
 
 def test_simulator_feeds_live_tracks_through_real_sockets(win, qgis_app):
     win.toggle_simulator()
-    assert pump(qgis_app, lambda: len(win.devices.devices) >= 3, timeout=10)
+    assert pump(qgis_app, lambda: len(win.devices.devices) >= 3, timeout=12)
     names = {d.name for d in win.devices.devices.values()}
     assert {"RAVEN-7", "PATROL 1", "TOWER CAM"} <= names
     assert win.wb.operation.layer("footprints").featureCount() == 1

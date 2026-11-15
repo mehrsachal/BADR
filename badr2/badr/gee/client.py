@@ -162,30 +162,23 @@ def tile_uri(image, vis):
     return "type=xyz&zmin=0&zmax=20&url=" + urllib.parse.quote(url, safe=":/{}")
 
 
-def add_layer(wb, product, bbox=None, start=None, end=None, name=None):
-    """Stream an Earth Engine product onto the map."""
-    from qgis.core import QgsRasterLayer
-    bbox = bbox or wb.extent_wgs84()
+def prepare_layer(product, bbox, start=None, end=None, name=None):
+    """Network part (worker-thread safe): -> (uri, title, group, summary, props)."""
     image, vis, span = build(product, bbox, start, end)
     title = name or f"{PRODUCTS[product][0]} [{span}]"
-    layer = QgsRasterLayer(tile_uri(image, vis), title, "wms")
-    layer.setCustomProperty("badr/gee_product", product)
-    wb.add_layer(layer, "Imagery")
-    return {"layer": layer.name(), "product": product, "period": span,
-            "summary": f"Added {PRODUCTS[product][0]} ({span}) from Earth Engine."}
+    return (tile_uri(image, vis), title, f"Added {PRODUCTS[product][0]} ({span}) from Earth Engine.",
+            {"badr/gee_product": product})
 
 
-def change_detection(wb, before, after, method="optical", bbox=None):
-    """Highlight change between two periods.
+def prepare_change(before, after, method="optical", bbox=None):
+    """Network part of change detection.
 
     ``before`` / ``after`` are (start, end) ISO-date pairs.  ``optical`` uses
     the Sentinel-2 vegetation/bare-soil signal (new tracks, clearing, earth
     works, burn scars); ``sar`` uses the Sentinel-1 backscatter log-ratio and
     works through cloud (new structures, vehicles in the open, flooding).
     """
-    from qgis.core import QgsRasterLayer
     ee = init()
-    bbox = bbox or wb.extent_wgs84()
     region = _region(ee, bbox)
     if method == "sar":
         a = _s1(ee, region, *before).median()
@@ -202,10 +195,31 @@ def change_detection(wb, before, after, method="optical", bbox=None):
     else:
         raise ValueError("method must be 'optical' or 'sar'")
     title = f"{label} {before[0]}..{before[1]} vs {after[0]}..{after[1]}"
-    layer = QgsRasterLayer(tile_uri(diff, vis), title, "wms")
+    return (tile_uri(diff, vis), title,
+            f"Change layer added ({method}): {before[0]}..{before[1]} vs {after[0]}..{after[1]}.", {})
+
+
+def finish_layer(wb, uri, title, summary, props):
+    """GUI part: put a prepared Earth Engine tile layer on the map."""
+    from qgis.core import QgsRasterLayer
+    layer = QgsRasterLayer(uri, title, "wms")
+    for k, v in props.items():
+        layer.setCustomProperty(k, v)
     wb.add_layer(layer, "Imagery")
-    return {"layer": layer.name(), "method": method,
-            "summary": f"Change layer added ({method}): {before[0]}..{before[1]} vs {after[0]}..{after[1]}."}
+    return {"layer": layer.name(), "summary": summary}
+
+
+def add_layer(wb, product, bbox=None, start=None, end=None, name=None):
+    """Stream an Earth Engine product onto the map."""
+    out = finish_layer(wb, *prepare_layer(product, bbox or wb.extent_wgs84(), start, end, name))
+    out["product"] = product
+    return out
+
+
+def change_detection(wb, before, after, method="optical", bbox=None):
+    out = finish_layer(wb, *prepare_change(before, after, method, bbox or wb.extent_wgs84()))
+    out["method"] = method
+    return out
 
 
 def download(image, bbox, scale, out_path, progress=None, max_grid=6):

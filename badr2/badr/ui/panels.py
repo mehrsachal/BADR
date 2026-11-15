@@ -35,7 +35,7 @@ def h1(text):
 
 
 def h2(text):
-    lab = QLabel(text.upper())
+    lab = QLabel(text)
     lab.setObjectName("h2")
     return lab
 
@@ -60,6 +60,7 @@ def button(text, slot=None, primary=False, tip=""):
 
 def row(*widgets):
     w = QWidget()
+    w.setObjectName("bare")
     lay = QHBoxLayout(w)
     lay.setContentsMargins(0, 0, 0, 0)
     lay.setSpacing(6)
@@ -80,11 +81,13 @@ class Panel(QWidget):
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setObjectName("bare")
         body = QWidget()
+        body.setObjectName("bare")
         self.lay = QVBoxLayout(body)
         self.lay.setContentsMargins(12, 10, 12, 12)
         self.lay.setSpacing(6)
-        self.lay.addWidget(h1(self.title.upper()))
+        self.lay.addWidget(h1(self.title))
         body.setMinimumWidth(0)
         body.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         scroll.setWidget(body)
@@ -110,22 +113,31 @@ class PicturePanel(Panel):
     def build(self):
         w = self.win
         self.lay.addWidget(row(button("New", w.new_operation), button("Open", w.open_operation_dialog),
-                               button("Export map", w.export_image)))
+                               button("Export data", w.export_data, primary=True,
+                                      tip="GeoPackage, Shapefile, GeoJSON, KML, CSV, file geodatabase")))
         self.lay.addWidget(h2("Layers"))
         self.tree = QgsLayerTreeView()
         self.tree.setHeaderHidden(True)
         self.tree.setStyleSheet(f"QTreeView {{ background: {theme.BG}; color: {theme.TEXT}; }}")
+        self.tree.setIndentation(14)
         self.lay.addWidget(self.tree, 1)
-        self.lay.addWidget(row(button("Add file...", w.add_file_layer, tip="Any GIS file QGIS can read"),
-                               button("Remove", self.remove_selected), button("Zoom to", self.zoom_selected)))
+        self.tree.doubleClicked.connect(lambda _i: w.open_table(self.tree.currentLayer()))
+        from .main_window import LayerMenu
+        self._menu = LayerMenu(w, self.tree)
+        self.tree.setMenuProvider(self._menu)
+        self.lay.addWidget(row(button("Add file", w.add_file_layer, tip="Any GIS file QGIS can read"),
+                               button("Table", lambda: w.open_table(self.tree.currentLayer()),
+                                      tip="Attribute table of the selected layer (or double-click the layer)"),
+                               button("Zoom", self.zoom_selected), button("Remove", self.remove_selected)))
+        self.lay.addWidget(hint("Double-click a layer for its attribute table. Right-click for more."))
         self.lay.addWidget(h2("Basemap"))
         self.basemap = QComboBox()
         self.basemap.addItems(["None (offline)"] + list(BASEMAPS))
         self.basemap.currentTextChanged.connect(lambda name: w.wb.set_basemap(name))
         self.lay.addWidget(self.basemap)
-        self.lay.addWidget(h2("Picture summary"))
         self.counts = hint("")
         self.lay.addWidget(self.counts)
+        self.lay.addWidget(row(button("Save map image", w.export_image)))
         self.on_operation()
 
     def on_operation(self):
@@ -468,11 +480,13 @@ class IntelPanel(Panel):
         self.summary = hint("No incidents yet.")
         self.lay.addWidget(self.summary)
         self.lay.addWidget(h2("Ask"))
-        for q in ("Where and when is the IED threat highest, and which of my routes is most exposed?",
-                  "Summarise the incident picture for the last week as a short INTSUM.",
-                  "Suggest NAIs to confirm or deny the pattern you see."):
-            b = QPushButton(q)
-            b.setStyleSheet("text-align:left; padding:6px;")
+        for label, q in (("Where is the IED threat highest?",
+                          "Where and when is the IED threat highest, and which of my routes is most exposed?"),
+                         ("Short INTSUM", "Summarise the incident picture as a short INTSUM."),
+                         ("Suggest NAIs", "Suggest NAIs to confirm or deny the pattern you see.")):
+            b = QPushButton(label)
+            b.setStyleSheet("text-align:left;")
+            b.setToolTip(q)
             b.clicked.connect(lambda _=False, text=q: w.ask(text))
             self.lay.addWidget(b)
         self.on_operation()
@@ -578,7 +592,7 @@ class SensorsPanel(Panel):
 
     def build(self):
         w = self.win
-        self.lay.addWidget(hint("Any transport, any protocol. Links are receive-only."))
+        self.lay.addWidget(hint("Any transport with any protocol. Links are receive-only."))
         self.lay.addWidget(h2("New connection"))
         self.preset = QComboBox()
         self.preset.addItem("Custom...", None)
@@ -597,6 +611,7 @@ class SensorsPanel(Panel):
         self.lay.addWidget(self.transport)
         self.lay.addWidget(self.protocol)
         self.form_host = QWidget()
+        self.form_host.setObjectName("bare")
         self.form = QFormLayout(self.form_host)
         self.form.setContentsMargins(0, 0, 0, 0)
         self.lay.addWidget(self.form_host)
@@ -799,12 +814,116 @@ class ToolsPanel(Panel):
             self.win.command.setFocus()
 
 
+class DrawPanel(Panel):
+    """Free drawing and custom layers - everything that is not a NATO symbol."""
+
+    title = "Draw"
+
+    def build(self):
+        from ..core import exchange
+        from .widgets import NewLayerDialog
+        self._exchange, self._dialog = exchange, NewLayerDialog
+        w = self.win
+        self.lay.addWidget(hint("Your own layers: notes, key terrain, water points, boundaries, anything. "
+                                "They are saved with the operation and export like any GIS layer."))
+        self.lay.addWidget(h2("Layer"))
+        self.layer = QComboBox()
+        self.lay.addWidget(self.layer)
+        self.lay.addWidget(row(button("New layer", self.new_layer, primary=True),
+                               button("Table", lambda: w.open_table(self.current()),
+                                      tip="Open the attribute table to view and edit rows"),
+                               button("Colour", lambda: self.current() and w.recolor_layer(self.current()))))
+        self.lay.addWidget(h2("Add a feature"))
+        self.name = QLineEdit()
+        self.name.setPlaceholderText("Label shown on the map")
+        self.notes = QLineEdit()
+        self.notes.setPlaceholderText("Notes (optional)")
+        self.lay.addWidget(self.name)
+        self.lay.addWidget(self.notes)
+        self.draw_btn = button("Draw on map", self.draw, primary=True)
+        self.lay.addWidget(self.draw_btn)
+        self.lay.addWidget(hint("Points: click. Lines and areas: click each vertex, right-click to finish, "
+                                "Backspace removes the last vertex. Select a drawn feature to edit or delete it."))
+        self.lay.addWidget(h2("Quick layers"))
+        for label, geom, color in (("Notes (points)", "point", "#ffd24a"), ("Sketch lines", "line", "#ff8a3d"),
+                                   ("Sketch areas", "polygon", "#b48cff")):
+            self.lay.addWidget(button(label, lambda l=label, g=geom, c=color: self.quick(l, g, c)))
+        w.wb.project.layersAdded.connect(lambda *_: self.refresh())
+        w.wb.project.layersRemoved.connect(lambda *_: self.refresh())
+        self.refresh()
+
+    def on_operation(self):
+        self.refresh()
+
+    def refresh(self):
+        try:
+            current = self.layer.currentData()
+        except RuntimeError:
+            return                             # panel of a window that has been closed
+        self.layer.blockSignals(True)
+        self.layer.clear()
+        for lyr in self._exchange.user_layers(self.win.wb):
+            kind = {0: "points", 1: "lines", 2: "areas"}.get(lyr.geometryType(), "")
+            self.layer.addItem(f"{lyr.name()}  ({kind})", lyr.id())
+        i = self.layer.findData(current)
+        if i >= 0:
+            self.layer.setCurrentIndex(i)
+        self.layer.blockSignals(False)
+        self.draw_btn.setEnabled(self.layer.count() > 0)
+
+    def current(self):
+        return self.win.wb.project.mapLayer(self.layer.currentData()) if self.layer.count() else None
+
+    def _select(self, layer):
+        self.refresh()
+        i = self.layer.findData(layer.id())
+        if i >= 0:
+            self.layer.setCurrentIndex(i)
+
+    def new_layer(self):
+        dlg = self._dialog(self.win)
+        if not dlg.exec():
+            return
+        name, geom, color, fields = dlg.values()
+        try:
+            self._select(self._exchange.create_user_layer(self.win.wb, name, geom, color, fields))
+        except Exception as exc:
+            self.win.say(str(exc), "error")
+
+    def quick(self, label, geom, color):
+        name = label.split(" (")[0]
+        existing = next((l for l in self._exchange.user_layers(self.win.wb) if l.name() == name), None)
+        self._select(existing or self._exchange.create_user_layer(self.win.wb, name, geom, color))
+        self.draw()
+
+    def draw(self):
+        layer = self.current()
+        if layer is None:
+            return
+        win, gt = self.win, layer.geometryType()
+        color = layer.customProperty("badr/color") or "#ffd24a"
+
+        def add(pts):
+            try:
+                self._exchange.add_user_feature(win.wb, layer, pts, self.name.text().strip(),
+                                                self.notes.text().strip())
+            except Exception as exc:
+                win.say(str(exc), "error")
+            if gt == 0:
+                win.pick(1, add, f"{layer.name()}: click to add points (Esc to stop)")
+        if gt == 0:
+            win.pick(1, add, f"{layer.name()}: click to add points (Esc to stop)")
+        else:
+            win.sketch(gt == 2, add, f"{layer.name()}: click vertices, right-click to finish", color)
+
+
 MODES = [
-    ("PICTURE", "◎", PicturePanel, "Layers, basemap and the operation"),
-    ("PLAN", "✚", PlanPanel, "NATO symbols and control measures"),
-    ("TERRAIN", "▲", TerrainPanel, "Visibility, mobility, routes, landing zones"),
-    ("INTEL", "◆", IntelPanel, "Incidents and pattern analysis"),
-    ("IMAGERY", "▦", ImageryPanel, "Earth Engine imagery and change detection"),
-    ("SENSORS", "◉", SensorsPanel, "Drones, trackers and sensor feeds"),
-    ("TOOLS", "⚙", ToolsPanel, "Every QGIS tool, searchable"),
+    ("PICTURE", "picture", PicturePanel, "layers, basemap, export"),
+    ("PLAN", "plan", PlanPanel, "NATO symbols and control measures"),
+    ("DRAW", "draw", DrawPanel, "your own layers, notes and sketches"),
+    ("TERRAIN", "terrain", TerrainPanel, "visibility, mobility, routes, landing zones"),
+    ("INTEL", "intel", IntelPanel, "incidents and pattern analysis"),
+    ("IMAGERY", "imagery", ImageryPanel, "Earth Engine imagery and change detection"),
+    ("SENSORS", "sensors", SensorsPanel, "drones, trackers and sensor feeds"),
+    ("TOOLS", "tools", ToolsPanel, "every QGIS tool, searchable"),
 ]

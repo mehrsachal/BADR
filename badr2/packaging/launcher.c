@@ -6,7 +6,7 @@
  * start-up fails shows a message that points at the log file.
  *
  * Build:  x86_64-w64-mingw32-windres badr.rc -O coff -o badr.res
- *         x86_64-w64-mingw32-gcc -O2 -municode -mwindows launcher.c badr.res -o BADR.exe
+ *         x86_64-w64-mingw32-gcc -O2 -municode -mwindows launcher.c badr.res -o BADR.exe -lgdi32
  */
 #ifndef UNICODE
 #define UNICODE
@@ -23,11 +23,6 @@
 static int is_file(const wchar_t *p) {
     DWORD a = GetFileAttributesW(p);
     return a != INVALID_FILE_ATTRIBUTES && !(a & FILE_ATTRIBUTE_DIRECTORY);
-}
-
-static int is_dir(const wchar_t *p) {
-    DWORD a = GetFileAttributesW(p);
-    return a != INVALID_FILE_ATTRIBUTES && (a & FILE_ATTRIBUTE_DIRECTORY);
 }
 
 /* <root>\bin\python-qgis-ltr.bat or python-qgis.bat -> out; returns 1 if found */
@@ -86,8 +81,107 @@ static const wchar_t *arguments(void) {
     return p;
 }
 
+/* ---- instant splash -------------------------------------------------------
+ * Python + QGIS need a few seconds before they can draw anything, so the
+ * launcher shows a small native window with a moving bar straight away.  The
+ * application signals a named event once its own splash is on screen and this
+ * one closes.  If the event never comes, it closes when the process exits or
+ * after SPLASH_MAX_MS. */
+#define SPLASH_W 440
+#define SPLASH_H 170
+#define SPLASH_MAX_MS 90000
+static int g_tick = 0;
+
+static LRESULT CALLBACK splash_proc(HWND w, UINT msg, WPARAM wp, LPARAM lp) {
+    switch (msg) {
+    case WM_TIMER:
+        g_tick++;
+        InvalidateRect(w, NULL, FALSE);
+        return 0;
+    case WM_ERASEBKGND:
+        return 1;
+    case WM_PAINT: {
+        PAINTSTRUCT ps;
+        HDC dc = BeginPaint(w, &ps);
+        RECT r;
+        GetClientRect(w, &r);
+        HBRUSH bg = CreateSolidBrush(RGB(0x1f, 0x20, 0x23));
+        FillRect(dc, &r, bg);
+        DeleteObject(bg);
+        SetBkMode(dc, TRANSPARENT);
+        HFONT title = CreateFontW(-34, 0, 0, 0, FW_BOLD, 0, 0, 0, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, L"Segoe UI");
+        HFONT small = CreateFontW(-13, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, L"Segoe UI");
+        HFONT old = (HFONT)SelectObject(dc, title);
+        SetTextColor(dc, RGB(0xe4, 0xe5, 0xe8));
+        TextOutW(dc, 28, 22, L"BADR", 4);
+        SelectObject(dc, small);
+        SetTextColor(dc, RGB(0x8f, 0x91, 0x99));
+        TextOutW(dc, 30, 68, L"Planning and analysis", 21);
+        TextOutW(dc, 30, 138, L"Starting", 8);
+        /* indeterminate bar: a block sliding across a track */
+        RECT track = { 28, 124, SPLASH_W - 28, 128 };
+        HBRUSH tb = CreateSolidBrush(RGB(0x2a, 0x2b, 0x2f));
+        FillRect(dc, &track, tb);
+        DeleteObject(tb);
+        int span = (track.right - track.left) + 90;
+        int x = track.left - 90 + (g_tick * 9) % span;
+        RECT block = { x < track.left ? track.left : x, track.top,
+                       x + 90 > track.right ? track.right : x + 90, track.bottom };
+        if (block.right > block.left) {
+            HBRUSH ab = CreateSolidBrush(RGB(0x4a, 0x90, 0xe2));
+            FillRect(dc, &block, ab);
+            DeleteObject(ab);
+        }
+        SelectObject(dc, old);
+        DeleteObject(title);
+        DeleteObject(small);
+        EndPaint(w, &ps);
+        return 0;
+    }
+    }
+    return DefWindowProcW(w, msg, wp, lp);
+}
+
+static HWND splash_open(HINSTANCE inst) {
+    WNDCLASSW wc;
+    ZeroMemory(&wc, sizeof(wc));
+    wc.lpfnWndProc = splash_proc;
+    wc.hInstance = inst;
+    wc.hCursor = LoadCursorW(NULL, (LPCWSTR)IDC_APPSTARTING);
+    wc.lpszClassName = L"BadrSplash";
+    RegisterClassW(&wc);
+    int x = (GetSystemMetrics(SM_CXSCREEN) - SPLASH_W) / 2;
+    int y = (GetSystemMetrics(SM_CYSCREEN) - SPLASH_H) / 2;
+    HWND w = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_TOPMOST, L"BadrSplash", L"BADR", WS_POPUP,
+                             x, y, SPLASH_W, SPLASH_H, NULL, NULL, inst, NULL);
+    if (w) {
+        ShowWindow(w, SW_SHOWNOACTIVATE);
+        UpdateWindow(w);
+        SetTimer(w, 1, 33, NULL);
+    }
+    return w;
+}
+
+/* Animate the splash until the app says it is on screen, the process ends, or time runs out. */
+static void splash_run(HWND w, HANDLE process, HANDLE ready) {
+    HANDLE handles[2] = { process, ready };
+    DWORD start = GetTickCount();
+    for (;;) {
+        DWORD r = MsgWaitForMultipleObjects(ready ? 2 : 1, handles, FALSE, 100, QS_ALLINPUT);
+        if (r == WAIT_OBJECT_0 || r == WAIT_OBJECT_0 + 1) break;
+        MSG m;
+        while (PeekMessageW(&m, NULL, 0, 0, PM_REMOVE)) {
+            TranslateMessage(&m);
+            DispatchMessageW(&m);
+        }
+        if (GetTickCount() - start > SPLASH_MAX_MS) break;
+    }
+    if (w) DestroyWindow(w);
+}
+
+
 int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, PWSTR cmdline, int show) {
-    (void)inst; (void)prev; (void)cmdline; (void)show;
+    (void)prev; (void)cmdline; (void)show;
     static wchar_t exe_dir[PATHLEN], app_dir[PATHLEN], probe[PATHLEN], bat[PATHLEN];
     static wchar_t log_dir[PATHLEN], log_path[PATHLEN], cmd[CMDLEN], msg[CMDLEN];
 
@@ -138,6 +232,17 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, PWSTR cmdline, int show) {
     _snwprintf(cmd, CMDLEN, L"cmd.exe /d /s /c \"\"%ls\" \"%ls\\boot.py\" %ls\"", bat, app_dir, arguments());
     cmd[CMDLEN - 1] = 0;
 
+    /* splash + the event the application sets when its own window is up (skipped for scripted runs) */
+    HWND splash = NULL;
+    HANDLE ready = NULL;
+    if (!GetEnvironmentVariableW(L"BADR_QUIET", probe, PATHLEN)) {
+        wchar_t ev[64];
+        _snwprintf(ev, 64, L"Local\\BADR2_Ready_%lu", (unsigned long)GetCurrentProcessId());
+        ready = CreateEventW(NULL, TRUE, FALSE, ev);
+        SetEnvironmentVariableW(L"BADR_SPLASH_EVENT", ev);
+        splash = splash_open(inst);
+    }
+
     STARTUPINFOW si;
     PROCESS_INFORMATION pi;
     ZeroMemory(&si, sizeof(si));
@@ -150,9 +255,11 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, PWSTR cmdline, int show) {
     }
     if (!CreateProcessW(NULL, cmd, NULL, NULL, TRUE, CREATE_NO_WINDOW, NULL, app_dir, &si, &pi)) {
         _snwprintf(msg, CMDLEN, L"Could not start the QGIS Python runtime:\n%ls", bat);
+        if (splash) DestroyWindow(splash);
         MessageBoxW(NULL, msg, L"BADR", MB_OK | MB_ICONERROR);
         return 4;
     }
+    if (splash) splash_run(splash, pi.hProcess, ready);
     WaitForSingleObject(pi.hProcess, INFINITE);
     DWORD code = 0;
     GetExitCodeProcess(pi.hProcess, &code);
