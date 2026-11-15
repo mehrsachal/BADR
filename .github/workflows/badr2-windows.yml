@@ -10,6 +10,11 @@ on:
     paths: ["badr2/**", ".github/workflows/badr2-windows.yml"]
     tags: ["badr2-v*"]
   workflow_dispatch:
+    inputs:
+      release_version:
+        description: "Publish a GitHub release with this version (e.g. 2.0.0). Leave empty to build only."
+        required: false
+        default: ""
 
 permissions:
   contents: write
@@ -165,10 +170,12 @@ jobs:
           retention-days: 14
 
       - name: Publish release
-        if: startsWith(github.ref, 'refs/tags/badr2-v')
+        if: startsWith(github.ref, 'refs/tags/badr2-v') || inputs.release_version != ''
         uses: softprops/action-gh-release@v2
         with:
-          name: BADR ${{ github.ref_name }}
+          tag_name: ${{ inputs.release_version != '' && format('badr2-v{0}', inputs.release_version) || github.ref_name }}
+          target_commitish: ${{ github.sha }}
+          name: BADR ${{ inputs.release_version != '' && inputs.release_version || github.ref_name }}
           body_path: badr2/packaging/RELEASE_NOTES.md
           fail_on_unmatched_files: true
           files: |
