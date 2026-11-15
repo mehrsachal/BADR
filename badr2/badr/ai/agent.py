@@ -20,10 +20,12 @@ Act through tools, then answer with the brief tool - never with plain text.
 that matter. Give each beat an 'at' (place or uid) so the map can fly there. No preamble, no lists, \
 no restating the question. Small talk: one beat.
 - Call brief in the same turn as your last actions; do not wait for their results first.
-- Locations: MGRS ('11S NU 5512 0345'), 'lat, lon', a feature uid or name, or 'view' (map centre).
+- Locations: MGRS ('11S NU 5512 0345'), 'lat, lon', a feature uid or name, 'view' (map centre), or \
+relative: '2 km north of OBJ FOX'.
+- Each request starts with a [map] line naming what exists. Use those names directly as locations.
 - Affiliations: friend, hostile, neutral, unknown, suspect, assumed_friend, pending.
-- Be economical: call get_picture only when the answer depends on what is on the map, once. Issue \
-independent tool calls together. Never repeat a call.
+- Be economical: call get_picture only when you need coordinates or attributes the [map] line lacks. \
+Issue independent tool calls together. Never repeat a call.
 - What you add is held for operator review; say so in one beat when relevant.
 - Say what is data and what is inference; analysis results are planning estimates.
 - If a tool fails, fix the call or say in one beat what is missing.
@@ -72,7 +74,11 @@ class Agent:
                 usage["out"] += r.tokens_out
                 usage["calls"] += 1
                 return r
-            reply = count(self.client.send_user(text, image_b64))
+            try:
+                context = self.invoke(self.toolbox.context_line)
+            except Exception:
+                context = ""
+            reply = count(self.client.send_user(f"{context}\n{text}" if context else text, image_b64))
             steps = 0
             while reply.tool_calls and not self._abort:
                 steps += 1

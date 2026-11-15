@@ -47,18 +47,22 @@ often needed several retry rounds. BADR 2 changes the mechanics:
 - **Fast default model** with a Fast / Balanced / Deep setting, a 90-second
   timeout, and a per-request token readout.
 
-These are design properties; I have not benchmarked them against BADR 1 with a
-live model in this environment (no API key here).
+Measured against the live Claude API (`claude-haiku-5-5`, Fast) on the demo:
+a greeting costs nothing; a place-and-draw order took 2.7 s in one call
+($0.0007); a route-exposure question 3.4 s in two calls; a full brief 7.4 s in
+three. Fixed overhead is about 3,600 input tokens per call, cached after the
+first. BADR 1 was not measured the same way, so no like-for-like ratio is claimed.
 
 ## The screen
 
-Eight modes replace QGIS' menus, toolbars and docks:
+Nine modes replace QGIS' menus, toolbars and docks:
 
 | Mode | What it is for |
 |---|---|
-| **Picture** | layers, attribute tables, basemap, open/new operation, export |
+| **Contents** | map layers in drawing order, attribute tables, basemap, open/new operation, export |
+| **Catalog** | geodatabases: feature datasets, feature classes, tables, fields, domains |
 | **Plan** | APP-6D symbol palette and search, control lines and areas |
-| **Draw** | your own point / line / area layers, notes and sketches |
+| **Draw** | draw into your own quick layers or into geodatabase feature classes |
 | **Terrain** | elevation, viewshed, line of sight, mobility, routes, landing zones, range rings, GRG, cordon |
 | **Intel** | incident logging, hotspots, pattern-of-life matrix, route threat |
 | **Imagery** | Earth Engine products, change detection, OpenStreetMap reference data |
@@ -74,7 +78,7 @@ attribute table and export.
 **Right sidebar:** inspector, review queue, and the assistant. Answers arrive
 as a few short sentences; **Play** flies the map to each one in turn.
 
-**Export:** Picture → Export data writes any layers to GeoPackage, Shapefile,
+**Export:** Contents → Export data writes any layers to GeoPackage, Shapefile,
 GeoJSON, KML, CSV or a file geodatabase (WGS84). NATO symbols carry their SIDC
 so other systems can re-symbolise them.
 
@@ -112,6 +116,12 @@ links the engine directly. `badr/analysis/capabilities.py` indexes the live
 processing registry (373 algorithms on the QGIS 3.34 build tested here; more
 when GRASS or SAGA are installed), files each under a planning workflow, and lets the UI or the AI run any of
 them by id.
+
+**Geodatabases (Catalog).** Create Esri file geodatabases (`.gdb`, written
+through GDAL's OpenFileGDB driver) and GeoPackages; organise them with feature
+datasets (shared coordinate system), feature classes, tables, fields with
+aliases, and coded-value domains; import any map layer; add classes to the map
+and draw into them. See `badr/core/geodatabase.py`.
 
 **Sensors and devices.** A connection is a transport plus a protocol, chosen
 independently — no vendor-specific code path.
@@ -172,7 +182,7 @@ rendering; without it BADR falls back to a basic built-in frame renderer.
 ## Tests
 
 ```sh
-QT_QPA_PLATFORM=offscreen python3 -m pytest tests -q     # 85 tests
+QT_QPA_PLATFORM=offscreen python3 -m pytest tests -q     # 96 tests
 ```
 
 Covered: MGRS against a reference library; symbol codes, search and rendering;
@@ -181,10 +191,9 @@ index; all five decoders including fragmented and corrupt input; live feeds
 over real UDP sockets; every AI tool; the agent loop; both LLM wire formats;
 the main window, fast path and review queue.
 
-**Not verified here** (no credentials or hardware in the build environment):
-a live Claude or other model conversation, live Earth Engine requests (tested
-against a stand-in module only), real drones/radios/serial devices, MQTT, video
-playback, and macOS. Treat those paths as written-to-spec, not proven.
+**Not verified here:** live Earth Engine requests (tested against a stand-in
+module only), real drones/radios/serial devices, MQTT, video playback, opening
+the created `.gdb` in ArcGIS itself, and macOS.
 
 ## Layout
 

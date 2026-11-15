@@ -503,6 +503,16 @@ class MainWindow(QMainWindow):
         op.review_changed.connect(self._refresh_review)
         self._refresh_review()
         self.clear_selection()
+        for gdb, name in list(op.data_layers):          # feature classes that were on the map last time
+            try:
+                if os.path.exists(gdb) and not self._catalog_layers(gdb, name):
+                    from ..core import geodatabase as G
+                    layer = G.open_layer(gdb, name)
+                    if layer.geometryType() in (0, 1, 2):
+                        exchange.style_user_layer(layer)
+                    self.wb.add_layer(layer, "Data")
+            except Exception:
+                op.data_layers.remove([gdb, name])
         for p in self.panels.values():
             p.on_operation()
 
@@ -535,15 +545,59 @@ class MainWindow(QMainWindow):
             "GIS data (*.gpkg *.shp *.geojson *.json *.kml *.kmz *.gpx *.csv *.tif *.tiff *.jp2 *.img *.vrt *.mbtiles);;"
             "All files (*.*)")
         for path in paths:
-            name = os.path.splitext(os.path.basename(path))[0]
-            layer = QgsVectorLayer(path, name, "ogr")
-            if not layer.isValid():
-                layer = QgsRasterLayer(path, name)
-            if not layer.isValid():
-                self.say(f"Could not read {os.path.basename(path)}.", "error")
-                continue
-            self.wb.add_layer(layer, "Reference")
+            self.add_path(path)
+
+    # ---- catalog ------------------------------------------------------------
+    def _catalog_layers(self, gdb, name):
+        return [l for l in self.wb.project.mapLayers().values()
+                if l.customProperty("badr/gdb") == gdb and l.customProperty("badr/gdb_layer") == name]
+
+    def add_catalog_layer(self, gdb, name):
+        """Put a feature class or table from a geodatabase on the map (once)."""
+        from ..core import geodatabase as G
+        existing = self._catalog_layers(gdb, name)
+        if existing:
+            layer = existing[0]
+        else:
+            layer = G.open_layer(gdb, name)
+            if layer.geometryType() in (0, 1, 2):
+                palette = ["#ffd24a", "#5fd0c5", "#ff8a3d", "#b48cff", "#7fd96b", "#ff6f91"]
+                exchange.style_user_layer(layer, palette[len(self.wb.project.mapLayers()) % len(palette)])
+            self.wb.add_layer(layer, "Data")
+            op = self.wb.operation
+            if [gdb, name] not in op.data_layers:
+                op.data_layers.append([gdb, name])      # reopened with the operation
+                op.touch()
+            self.say(f"'{name}' added to the map. Draw into it from the Draw tab; double-click it in Contents "
+                     "for its table.")
+        if layer.featureCount():
             self.wb.zoom_to_layer(layer)
+        self._sync_layers()
+        return layer
+
+    def release_catalog_layer(self, gdb, name):
+        """Take a feature class off the map so its files can be renamed or deleted."""
+        for layer in self._catalog_layers(gdb, name):
+            self._selection = [(l, f) for l, f in self._selection if l is not layer]
+            self.wb.project.removeMapLayer(layer.id())
+        op = self.wb.operation
+        if [gdb, name] in op.data_layers:
+            op.data_layers.remove([gdb, name])
+            op.touch()
+        self._apply_selection()
+
+    def add_path(self, path):
+        from qgis.core import QgsRasterLayer, QgsVectorLayer
+        name = os.path.splitext(os.path.basename(path))[0]
+        layer = QgsVectorLayer(path, name, "ogr")
+        if not layer.isValid():
+            layer = QgsRasterLayer(path, name)
+        if not layer.isValid():
+            self.say(f"Could not read {os.path.basename(path)}.", "error")
+            return None
+        self.wb.add_layer(layer, "Reference")
+        self.wb.zoom_to_layer(layer)
+        return layer
 
     def export_image(self):
         path, _ = QFileDialog.getSaveFileName(self, "Export map image", "badr_map.png", "PNG (*.png)")
@@ -577,8 +631,8 @@ class MainWindow(QMainWindow):
 
     def open_current_table(self):
         layer = self._selection[0][0] if self._selection else None
-        if layer is None and "PICTURE" in self.panels.made:
-            layer = self.panels["PICTURE"].tree.currentLayer()
+        if layer is None and "CONTENTS" in self.panels.made:
+            layer = self.panels["CONTENTS"].tree.currentLayer()
         self.open_table(layer or self.wb.operation.layer("units"))
 
     def rename_layer(self, layer):

@@ -92,6 +92,7 @@ class Operation(QObject):
         self.layers = {}
         self.user_layers = []          # free-form layers saved with the operation
         self.user_specs = []           # [{table, name, color}] found on disk, to be restored
+        self.data_layers = []          # [[geodatabase path, feature class]] shown on the map
         self._dirty = False
         self._timer = QTimer(self)
         self._timer.setSingleShot(True)
@@ -174,6 +175,7 @@ class Operation(QObject):
             return
         self.name = meta.get("name") or self.name
         self.user_specs = list(meta.get("user_layers") or [])
+        self.data_layers = [list(x) for x in meta.get("data_layers") or []]
 
     # ---- persistence ----------------------------------------------------
     def _on_changed(self, key):
@@ -243,7 +245,7 @@ class Operation(QObject):
             first = False
         os.replace(tmp, path)                  # atomic: a crash never leaves a half-written operation
         with open(self.meta_path, "w", encoding="utf-8") as fh:
-            json.dump({"name": self.name, "user_layers": specs}, fh, indent=1)
+            json.dump({"name": self.name, "user_layers": specs, "data_layers": self.data_layers}, fh, indent=1)
         self._dirty = False
         self.saved.emit()
         return True

@@ -30,13 +30,14 @@ def pump(app, cond, timeout=8.0):
 
 def test_window_builds_all_seven_modes(win):
     from badr.ui.panels import MODES
-    assert [m[0] for m in MODES] == ["PICTURE", "PLAN", "DRAW", "TERRAIN", "INTEL", "IMAGERY", "SENSORS", "TOOLS"]
-    assert win.stack.count() == 8
-    assert list(win.panels.made) == ["PICTURE"]              # the rest are built on first use
-    for i in range(8):
+    assert [m[0] for m in MODES] == ["CONTENTS", "CATALOG", "PLAN", "DRAW", "TERRAIN", "INTEL", "IMAGERY",
+                                     "SENSORS", "TOOLS"]
+    assert win.stack.count() == 9
+    assert list(win.panels.made) == ["CONTENTS"]             # the rest are built on first use
+    for i in range(9):
         win.mode_group.button(i).click()
         assert win.stack.currentIndex() == i
-    assert len(win.panels.made) == 8
+    assert len(win.panels.made) == 9
     assert win.panels["PLAN"].list.count() > 5
     win.panels["PLAN"].search.setText("IED")
     assert win.panels["PLAN"].list.count() > 0

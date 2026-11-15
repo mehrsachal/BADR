@@ -52,6 +52,14 @@ def _draw(p):
     p.drawLine(QPointF(11.8, 5.5), QPointF(14.5, 8.2))
 
 
+def _catalog(p):
+    p.drawEllipse(QRectF(4, 3, 12, 4.5))
+    p.drawLine(QPointF(4, 5.2), QPointF(4, 14.8))
+    p.drawLine(QPointF(16, 5.2), QPointF(16, 14.8))
+    p.drawArc(QRectF(4, 12.5, 12, 4.5), 180 * 16, 180 * 16)
+    p.drawArc(QRectF(4, 7.8, 12, 4.5), 180 * 16, 180 * 16)
+
+
 def _tools(p):
     for y, x in ((5, 7), (10, 13), (15, 9)):
         p.drawLine(QPointF(3, y), QPointF(17, y))
@@ -168,7 +176,7 @@ def _plus(p):
 
 _ICONS = {
     "picture": _picture, "plan": _plan, "terrain": _terrain, "intel": _intel, "imagery": _imagery,
-    "sensors": _sensors, "draw": _draw, "tools": _tools, "select": _select, "pan": _pan,
+    "sensors": _sensors, "draw": _draw, "tools": _tools, "catalog": _catalog, "select": _select, "pan": _pan,
     "zoom_in": lambda p: _zoom(p, True), "zoom_out": lambda p: _zoom(p, False), "extent": _extent,
     "measure": _measure, "table": _table, "export": _export, "settings": _settings, "play": _play,
     "pause": _pause, "prev": _prev, "next": _next, "send": _send, "stop": _stop, "trash": _trash,

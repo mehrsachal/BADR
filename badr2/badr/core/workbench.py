@@ -16,7 +16,7 @@ from qgis.PyQt.QtCore import QObject, pyqtSignal
 from .store import Operation
 from ..symbology.styles import apply_styles, style_areas, style_lines
 
-GROUPS = ["Live", "COP", "Sketch", "Analysis", "Imagery", "Reference", "Basemap"]
+GROUPS = ["Live", "COP", "Sketch", "Data", "Analysis", "Imagery", "Reference", "Basemap"]
 
 BASEMAPS = {
     "OpenStreetMap": "type=xyz&url=https://tile.openstreetmap.org/{z}/{x}/{y}.png&zmax=19&zmin=0",

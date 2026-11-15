@@ -194,9 +194,19 @@ def user_layers(wb):
     return [l for l in wb.project.mapLayers().values() if l.customProperty("badr/user")]
 
 
-def add_user_feature(wb, layer, latlons, name="", notes=""):
-    """Add a feature from [(lat, lon), ...] to a user layer."""
-    from qgis.core import QgsFeature, QgsGeometry, QgsPointXY
+def editable_layers(wb):
+    """Layers the Draw mode can add features to: quick layers and catalog feature classes."""
+    out = []
+    for l in wb.project.mapLayers().values():
+        if l.type() == QgsMapLayer.VectorLayer and l.geometryType() in (0, 1, 2) and (
+                l.customProperty("badr/user") or l.customProperty("badr/editable")):
+            out.append(l)
+    return out
+
+
+def add_user_feature(wb, layer, latlons, name="", notes="", attrs=None):
+    """Add a feature from [(lat, lon), ...] (WGS84) to a quick layer or feature class."""
+    from qgis.core import QgsCoordinateTransform, QgsFeature, QgsGeometry, QgsPointXY, QgsWkbTypes
     pts = [QgsPointXY(lon, lat) for lat, lon in latlons]
     gt = layer.geometryType()
     if gt == 0:
@@ -209,15 +219,23 @@ def add_user_feature(wb, layer, latlons, name="", notes=""):
         if len(pts) < 3:
             raise ValueError("a polygon needs at least 3 points")
         geom = QgsGeometry.fromPolygonXY([pts + [pts[0]]])
+    if layer.crs().isValid() and layer.crs().authid() != "EPSG:4326":
+        geom.transform(QgsCoordinateTransform(wb.wgs84, layer.crs(), wb.project))
+    if QgsWkbTypes.isMultiType(layer.wkbType()):
+        geom.convertToMultiType()
     f = QgsFeature(layer.fields())
     f.setGeometry(geom)
-    f["name"] = name
-    f["notes"] = notes
+    values = {"name": name, "notes": notes}
+    values.update(attrs or {})
+    for key, value in values.items():
+        idx = layer.fields().indexOf(key)
+        if idx >= 0 and value not in (None, ""):
+            f.setAttribute(idx, value)
     ok, _ = layer.dataProvider().addFeatures([f])
     if not ok:
-        raise RuntimeError("could not add the feature")
+        raise RuntimeError(f"could not add the feature: {layer.dataProvider().lastError()}")
     layer.updateExtents()
     layer.triggerRepaint()
-    if wb.operation is not None:
+    if wb.operation is not None and layer.customProperty("badr/user"):
         wb.operation.touch()
     return True

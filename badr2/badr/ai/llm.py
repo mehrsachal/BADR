@@ -97,8 +97,12 @@ class AnthropicClient(BaseClient):
                            "Run: python -m pip install anthropic") from exc
         self._anthropic = anthropic
         # fail fast instead of hanging: one retry, 90 s per request
+        # gzip only: an old system brotli module (as shipped with some QGIS Pythons)
+        # cannot decode responses for the current HTTP client and shows up as a
+        # misleading "connection error".
         self.client = anthropic.Anthropic(api_key=api_key or Settings.api_key("anthropic") or None,
-                                          timeout=90.0, max_retries=1)
+                                          timeout=90.0, max_retries=1,
+                                          default_headers={"Accept-Encoding": "gzip"})
         self.model = model or Settings.model("anthropic")
         self.max_tokens = int(max_tokens or Settings.get("ai/max_tokens"))
         # server-side refusal fallback is not offered for Haiku models

@@ -40,7 +40,7 @@ def ok(box, tool, /, **args):
 # ---- tool layer -----------------------------------------------------------
 def test_tool_specs_are_valid_json_schema(box):
     specs = box.specs()
-    assert 12 <= len(specs) <= 16
+    assert 12 <= len(specs) <= 17
     # every definition is re-sent on each model call: keep the whole set small
     assert len(json.dumps(specs)) / 4 < 2000, "tool definitions grew past the token budget"
     assert not any(s["name"] in ("find_symbol", "update_feature") for s in specs)   # UI-only tools stay local

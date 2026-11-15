@@ -22,6 +22,11 @@ from ..symbology.palette import GRAPHIC_KINDS, PALETTE
 
 
 RESULT_CAP = 2200
+_OFFSET = re.compile(r"\s*(\d+(?:\.\d+)?\s*(?:km|m|nm|mi))\s+((?:north|south|east|west|[ns][ew]|north[- ]?(?:east|west)|"
+                     r"south[- ]?(?:east|west)|[nsew])|\d{1,3}(?:\s*(?:deg|°))?)\s+of\s+(.+)", re.I)
+_CARDINALS = {"n": 0, "north": 0, "ne": 45, "northeast": 45, "e": 90, "east": 90, "se": 135, "southeast": 135,
+              "s": 180, "south": 180, "sw": 225, "southwest": 225, "w": 270, "west": 270, "nw": 315,
+              "northwest": 315}
 
 
 class ToolError(Exception):
@@ -97,6 +102,14 @@ class Toolbox:
             return parse_coordinate(t)
         except ValueError:
             pass
+        # relative: "2 km north of OBJ FOX", "800 m 045 of CP 1"
+        m = _OFFSET.fullmatch(t)
+        if m:
+            base = self.locate(m.group(3))
+            brg = _CARDINALS.get(m.group(2).lower().replace("-", "").replace(" ", ""))
+            if brg is None:
+                brg = float(re.sub(r"[^0-9.]", "", m.group(2)))
+            return geodesy.destination(base[0], base[1], brg, geodesy.parse_distance(m.group(1)))
         op = self.wb.operation
         key, feat = op.find_any(t)
         if feat is None:
@@ -174,8 +187,9 @@ class Toolbox:
         O_ = {"type": "object"}
         LIST = {"type": "array", "items": S_}
 
-        add("get_picture", "Read what is on the map: units, incidents, measures, tracks, layers, view.",
-            {}, self.get_picture)
+        add("get_picture", "Read the map in detail (coordinates, attributes). With near + radius_m: only what "
+            "lies within that distance, with distances - use it for 'what is inside / near' questions.",
+            {"near": S_, "radius_m": N_}, self.get_picture)
         add("go_to", "Move the map.", {"location": S_, "radius_m": N_}, self.go_to, ["location"])
         add("place_symbol", "Place a NATO APP-6D symbol. symbol: plain words ('mechanized infantry', 'safe "
             "house', 'checkpoint') or a 20-digit SIDC.",
@@ -228,6 +242,13 @@ class Toolbox:
             {"action": {"type": "string", "enum": ["status", "options", "connect", "disconnect"]},
              "preset": S_, "name": S_, "transport": S_, "transport_options": O_, "protocol": S_,
              "protocol_options": O_, "id": S_}, self.sensors, ["action"])
+        add("geodatabase", "Manage file geodatabases (.gdb). list; create (name); dataset (name, epsg); "
+            "feature_class (name, geometry point|line|polygon|table, dataset, fields like 'surface:text'); "
+            "domain (name, values {code: text}); import (layer -> name, dataset); add_to_map (name).",
+            {"action": {"type": "string", "enum": ["list", "create", "dataset", "feature_class", "domain",
+                                                   "import", "add_to_map"]},
+             "gdb": S_, "name": S_, "geometry": S_, "dataset": S_, "epsg": I_, "fields": LIST, "layer": S_,
+             "values": O_}, self.geodatabase, ["action"])
         add("export", "Export layers to a GIS format: gpkg, shp, geojson, kml, csv, gdb. layers: names, "
             "default the whole picture.",
             {"format": S_, "layers": LIST}, self.export, ["format"])
@@ -252,7 +273,9 @@ class Toolbox:
         hid("run_gis_tool", "", {}, self.run_gis_tool)
 
     # ---- implementations -------------------------------------------------
-    def get_picture(self):
+    def get_picture(self, near=None, radius_m=None):
+        if near:
+            return self._nearby(near, float(radius_m or 2000))
         wb = self.wb
         ext = wb.extent_wgs84()
         parts = [f"Operation: {wb.operation.name}"]
@@ -604,3 +627,136 @@ class Toolbox:
             raise ToolError("brief needs at least one beat with 'say'")
         self.last_brief = out
         return "shown"
+
+    def context_line(self, limit=14):
+        """One short line of what exists, by name, attached to each request.
+
+        Names are enough for the model to act (every tool resolves names), so
+        most requests no longer need a get_picture round trip first."""
+        op = self.wb.operation
+        parts = []
+        for key, label in (("units", "units"), ("lines", "lines"), ("areas", "areas")):
+            layer = op.layer(key)
+            n = layer.featureCount()
+            if not n:
+                continue
+            names = []
+            for f in layer.getFeatures():
+                nm = str(f["name"] or "").strip()
+                if nm and nm not in names:
+                    names.append(nm if key == "units" else f"{f['kind']} {nm}")
+                if len(names) >= limit:
+                    break
+            more = f" +{n - len(names)} more/unnamed" if n > len(names) else ""
+            parts.append(f"{label}: {', '.join(names)}{more}")
+        inc = op.layer("incidents").featureCount()
+        if inc:
+            parts.append(f"incidents: {inc}")
+        if op.layer("tracks").featureCount():
+            parts.append(f"live tracks: {op.layer('tracks').featureCount()}")
+        pend = len(op.pending())
+        if pend:
+            parts.append(f"pending review: {pend}")
+        parts.append("elevation: " + ("loaded" if self.wb.dem() is not None else "not loaded"))
+        c = self.wb.center_wgs84()
+        if c:
+            parts.append(f"view centre {to_mgrs(c[0], c[1], 3)}")
+        return "[map] " + "; ".join(parts)
+
+    def _nearby(self, near, radius_m):
+        """Everything within radius_m of a place, nearest first, with distance and bearing."""
+        lat, lon = self.locate(near)
+        op = self.wb.operation
+        rows = []
+        for key in ("units", "incidents", "detections", "tracks", "lines", "areas"):
+            layer = op.layer(key)
+            names = layer.fields().names()
+            for f in layer.getFeatures():
+                g = f.geometry()
+                if g.isEmpty():
+                    continue
+                p = g.nearestPoint(QgsGeometry.fromPointXY(QgsPointXY(lon, lat))).asPoint()
+                d = geodesy.distance(lat, lon, p.y(), p.x())
+                if d > radius_m:
+                    continue
+                label = str((f["name"] if "name" in names else f["label"] if "label" in names else "") or "")
+                what = ""
+                if "sidc" in names and f["sidc"]:
+                    what = S.describe(str(f["sidc"]))
+                elif "kind" in names and f["kind"]:
+                    what = str(f["kind"])
+                rows.append((d, f"{d:.0f} m {geodesy.bearing(lat, lon, p.y(), p.x()):03.0f} deg: "
+                                f"{label} {what}".strip() + (f" [{f['dtg']}]" if key == "incidents" and f["dtg"] else "")))
+        rows.sort(key=lambda r: r[0])
+        if not rows:
+            return f"Nothing within {radius_m:.0f} m of {to_mgrs(lat, lon, 4)}."
+        head = f"{len(rows)} feature(s) within {radius_m:.0f} m of {to_mgrs(lat, lon, 4)}:"
+        return head + "\n" + "\n".join(r[1] for r in rows[:40])
+
+    def _gdb_folder(self):
+        import os
+        base = self.wb.operation.folder or os.path.join(os.path.expanduser("~"), "BADR")
+        return os.path.join(base, "data")
+
+    def _gdb_path(self, gdb=None, must_exist=True):
+        import os
+        from ..core import geodatabase as G
+        folder = self._gdb_folder()
+        if gdb:
+            path = gdb if os.path.isabs(gdb) else os.path.join(folder, gdb if G.kind(gdb) else gdb + ".gdb")
+        else:
+            found = sorted(f for f in (os.listdir(folder) if os.path.isdir(folder) else []) if G.kind(f))
+            if not found:
+                raise ToolError("no geodatabase yet; create one first (action=create, name=...)")
+            path = os.path.join(folder, found[0])
+        if must_exist and not os.path.exists(path):
+            raise ToolError(f"geodatabase {os.path.basename(path)} does not exist; create it first")
+        return path
+
+    def geodatabase(self, action, gdb=None, name=None, geometry="point", dataset=None, epsg=4326, fields=None,
+                    layer=None, values=None):
+        import os
+        from ..core import geodatabase as G
+        try:
+            if action == "list":
+                folder = self._gdb_folder()
+                out = {}
+                for f in sorted(os.listdir(folder)) if os.path.isdir(folder) else []:
+                    if G.kind(f):
+                        c = G.contents(os.path.join(folder, f))
+                        out[f] = {"datasets": {d: [r["name"] for r in rows] for d, rows in c["datasets"].items()},
+                                  "layers": [f"{r['name']} ({r['geometry']}, {r['count']})" for r in c["layers"]],
+                                  "domains": list(c["domains"])}
+                return out or "No geodatabase yet."
+            if action == "create":
+                path = G.create(self._gdb_path(name or self.wb.operation.name.split(" (")[0], must_exist=False))
+                return f"Created {os.path.basename(path)}."
+            path = self._gdb_path(gdb)
+            if action == "dataset":
+                return f"Feature dataset '{G.create_dataset(path, name, epsg or 4326)}' created."
+            if action == "feature_class":
+                specs = []
+                for f in fields or []:
+                    fname, _, ftype = str(f).partition(":")
+                    specs.append({"name": fname.strip(), "type": G.field_type(ftype.strip() or "text")})
+                if not any(s["name"].lower() == "name" for s in specs) and geometry != "table":
+                    specs.insert(0, {"name": "name", "type": "Text"})
+                made = G.create_feature_class(path, name, geometry or "point", epsg or 4326, dataset, specs)
+                return f"Feature class '{made}' created in {os.path.basename(path)}."
+            if action == "domain":
+                return f"Domain '{G.create_domain(path, name, values or {})}' created."
+            if action == "import":
+                src = self.wb.find_layer(layer or "")
+                if src is None:
+                    raise ToolError(f"no map layer named {layer!r}")
+                return f"Imported as feature class '{G.import_layer(src, path, name, dataset)}'."
+            if action == "add_to_map":
+                lyr = G.open_layer(path, name)
+                from ..core import exchange
+                if lyr.geometryType() in (0, 1, 2):
+                    exchange.style_user_layer(lyr)
+                self.wb.add_layer(lyr, "Data")
+                return f"'{name}' added to the map."
+        except G.GdbError as exc:
+            raise ToolError(str(exc))
+        raise ToolError(f"unknown action {action!r}")

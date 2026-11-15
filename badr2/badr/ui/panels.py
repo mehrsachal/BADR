@@ -107,7 +107,9 @@ class Panel(QWidget):
 
 # ---------------------------------------------------------------------------
 class PicturePanel(Panel):
-    title = "Picture"
+    """Contents: what is drawn on the map, in drawing order."""
+
+    title = "Contents"
     stretch_at_end = False
 
     def build(self):
@@ -824,8 +826,9 @@ class DrawPanel(Panel):
         from .widgets import NewLayerDialog
         self._exchange, self._dialog = exchange, NewLayerDialog
         w = self.win
-        self.lay.addWidget(hint("Your own layers: notes, key terrain, water points, boundaries, anything. "
-                                "They are saved with the operation and export like any GIS layer."))
+        self.lay.addWidget(hint("Draw into your own layers, or into feature classes you added from the Catalog. "
+                                "Quick layers are saved with the operation; feature classes are saved in their "
+                                "geodatabase."))
         self.lay.addWidget(h2("Layer"))
         self.layer = QComboBox()
         self.lay.addWidget(self.layer)
@@ -862,9 +865,10 @@ class DrawPanel(Panel):
             return                             # panel of a window that has been closed
         self.layer.blockSignals(True)
         self.layer.clear()
-        for lyr in self._exchange.user_layers(self.win.wb):
+        for lyr in self._exchange.editable_layers(self.win.wb):
             kind = {0: "points", 1: "lines", 2: "areas"}.get(lyr.geometryType(), "")
-            self.layer.addItem(f"{lyr.name()}  ({kind})", lyr.id())
+            where = "  ·  geodatabase" if lyr.customProperty("badr/gdb") else ""
+            self.layer.addItem(f"{lyr.name()}  ({kind}){where}", lyr.id())
         i = self.layer.findData(current)
         if i >= 0:
             self.layer.setCurrentIndex(i)
@@ -917,10 +921,16 @@ class DrawPanel(Panel):
             win.sketch(gt == 2, add, f"{layer.name()}: click vertices, right-click to finish", color)
 
 
+def _catalog_panel(win):
+    from .catalog import CatalogPanel          # imported late: catalog.py builds on this module
+    return CatalogPanel(win)
+
+
 MODES = [
-    ("PICTURE", "picture", PicturePanel, "layers, basemap, export"),
+    ("CONTENTS", "picture", PicturePanel, "map layers in drawing order, attribute tables, export"),
+    ("CATALOG", "catalog", _catalog_panel, "geodatabases, feature datasets, feature classes, domains"),
     ("PLAN", "plan", PlanPanel, "NATO symbols and control measures"),
-    ("DRAW", "draw", DrawPanel, "your own layers, notes and sketches"),
+    ("DRAW", "draw", DrawPanel, "draw into your own layers and feature classes"),
     ("TERRAIN", "terrain", TerrainPanel, "visibility, mobility, routes, landing zones"),
     ("INTEL", "intel", IntelPanel, "incidents and pattern analysis"),
     ("IMAGERY", "imagery", ImageryPanel, "Earth Engine imagery and change detection"),

@@ -29,19 +29,36 @@ The installer is not code-signed: on first run choose **More info → Run anyway
 - **Measure tool** (distance and bearing) and a map toolbar.
 - Redesigned interface: neutral palette, drawn icons, denser layout.
 
+### Catalog and geodatabases
+
+- **Catalog** mode: create real Esri file geodatabases (`.gdb`, open directly in ArcGIS Pro) and GeoPackages.
+- **Feature datasets**, **feature classes** (point, line, polygon), **tables**, **fields** with aliases, and
+  **coded-value domains**; add and delete fields, rename, delete, import any map layer.
+- Add feature classes to the map, draw into them from Draw mode, edit them in the attribute table.
+- The layer list is now called **Contents**, as in ArcGIS: Catalog is what exists on disk, Contents is what is drawn.
+
 ### Assistant speed and tokens
 
-- Greetings and acknowledgements are answered locally: no model call, no tokens.
-- Per-message overhead cut from about 3,400 to about 2,000 tokens (shorter tool definitions and prompt).
-- Most requests now finish in one model call instead of two.
-- Default model is now the fastest tier (`claude-haiku-5-5`, Fast depth). Existing installs on the old default are switched once; change it in Settings if you want deeper analysis.
-- Requests time out after 90 seconds with a clear message instead of hanging.
+Measured against the live Claude API (`claude-haiku-5-5`, Fast depth) on the demo scenario:
 
-Token figures are estimates from prompt size; they have not been measured against a live model.
+| Request | Time | Model calls | Cost |
+|---|---|---|---|
+| "hi" | instant | 0 (answered locally) | $0 |
+| "put a hostile mortar team 2 km north of OBJ FOX and draw a 3 km range ring" | 2.7 s | 1 | $0.0007 |
+| "which route is more exposed to IEDs?" | 3.4 s | 2 | $0.0007 |
+| "brief me" | 7.4 s | 3 | $0.0006 |
+
+- Each model call carries about 3,600 input tokens of fixed overhead (tool definitions and prompt), cached after the first.
+- A one-line summary of the map rides with each request, so most orders need no separate "read the map" call.
+- Relative locations work: "2 km north of OBJ FOX".
+- Default model is the fastest tier; existing installs on the old default are switched once. Change it in Settings for deeper analysis.
+- Requests time out after 90 seconds with a clear message instead of hanging.
+- Fixed a decoding fault that could make a working connection report "could not reach the API".
 
 ### Not yet verified
 
-- A live AI conversation and live Earth Engine requests (no credentials in the build environment)
+- Live Earth Engine requests (no credentials in the build environment)
+- Opening the created `.gdb` in ArcGIS itself (verified with GDAL only)
 - The installer wizard click-through; real drones, radios and serial devices; MQTT; video; macOS
 - The map does not tilt: playback pans and zooms on a 2D map
 
